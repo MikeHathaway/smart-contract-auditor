@@ -1,0 +1,257 @@
+# codex-smart-contract-auditor
+
+`codex-smart-contract-auditor` is a reusable GitHub Actions repository for **maximum-depth, sequential smart contract audits on pull requests**.
+
+It wires together two required audit skill families:
+
+- Trail of Bits `building-secure-contracts`, especially `$secure-workflow-guide`
+- forefy `.context`, especially `$smart-contract-audit`
+
+The goal is simple: let an EVM repository drop in **one workflow file** and get a merged audit report in both Markdown and JSON, plus an optional sticky PR summary comment.
+
+## What This Repo Does
+
+The reusable workflow:
+
+1. Checks out the caller repository.
+2. Installs deterministic audit prerequisites such as Slither.
+3. Installs external skill packs from their upstream repositories at pinned refs.
+4. Exposes the selected skills to Codex through repo-scoped `.agents/skills`.
+5. Builds a runtime audit prompt with PR and blast-radius context.
+6. Runs a **sequential** Codex audit:
+   - `$secure-workflow-guide`
+   - `$smart-contract-audit`
+   - merged final report
+7. Uploads:
+   - `audit-report.md`
+   - `audit-report.json`
+8. Optionally updates a sticky PR comment with severity counts and blocked-check status.
+
+## Why Sequential
+
+This v1 design is intentionally **sequential only**.
+
+That is the better reusable default for smart contract audits:
+
+- one shared preflight
+- one deterministic prompt
+- fewer race conditions
+- simpler artifact handling
+- cleaner merged output
+- easier debugging when a required skill is blocked
+
+Parallel execution is possible later, but it adds duplication, merging complexity, and more ways for a reusable workflow to fail noisily.
+
+## Consumer Setup
+
+Add one workflow file to the repository you want to audit:
+
+```yaml
+name: Smart Contract Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  audit:
+    uses: your-org/codex-smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
+    with:
+      effort: high
+      severity-threshold: medium
+      fail-on-severity: high
+      post-pr-comment: true
+      pr-number: ${{ github.event.pull_request.number }}
+      base-sha: ${{ github.event.pull_request.base.sha }}
+      head-sha: ${{ github.event.pull_request.head.sha }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+There is also a ready-to-copy example in [`.github/workflows/example-consumer.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer.yml).
+
+## Required Secret
+
+- `OPENAI_API_KEY`
+
+The reusable workflow treats this secret as optional so it can degrade cleanly for environments like forked PRs. If the key is not available, it still emits deterministic artifacts with a `Blocked Checks` section instead of failing silently.
+
+## Required Permissions
+
+Caller workflow:
+
+- `contents: read`
+- `issues: write` if you want sticky PR comments
+- `pull-requests: write` if you want sticky PR comments
+
+The audit job itself uses only `contents: read`. PR write access is isolated to the separate comment job.
+
+## Inputs
+
+The reusable workflow supports these inputs:
+
+- `model`: optional Codex model override
+- `effort`: Codex reasoning effort, defaults to `high`
+- `working-directory`: repository subdirectory to prioritize
+- `severity-threshold`: summary emphasis threshold, defaults to `medium`
+- `fail-on-severity`: fail the workflow when findings at or above this severity exist
+- `post-pr-comment`: enable or disable sticky PR comments
+- `extra-audit-instructions`: append extra markdown instructions to the runtime prompt
+- `base-sha`: optional explicit base SHA
+- `head-sha`: optional explicit head SHA
+- `pr-number`: optional explicit pull request number
+
+## What The Report Contains
+
+`audit-report.md` contains the merged human-readable report with these sections:
+
+1. Executive Summary
+2. Scope
+3. PR / Diff Context
+4. Blast Radius
+5. Skills / Checks Run
+6. Findings Table
+7. Detailed Findings
+8. Attack Paths / PoC Notes
+9. Security Properties to Add
+10. Tests / Verification Gaps
+11. Blocked Checks
+12. Recommended Next Actions
+
+`audit-report.json` contains a deterministic machine-readable summary suitable for:
+
+- Codex-based reviewer tooling
+- future Claude reviewer integrations
+- post-processing pipelines
+- dashboards and policy gates
+
+The JSON includes:
+
+- severity counts
+- changed and reviewed scope
+- checks run
+- findings with source skills
+- security properties to add
+- blocked checks
+
+## How The Skill Packs Are Incorporated
+
+### Trail of Bits
+
+This repo installs `trailofbits/skills` at a pinned ref and exposes selected smart-contract skills through `.agents/skills`, including:
+
+- `secure-workflow-guide`
+- `token-integration-analyzer`
+- `entry-point-analyzer`
+- `guidelines-advisor`
+
+The prompt explicitly requires `$secure-workflow-guide` to run and explicitly requires the merged report to cover its 5-step workflow:
+
+- known issues scan
+- special feature checks
+- visual inspection
+- security properties
+- manual review areas
+
+### forefy
+
+This repo installs `forefy/.context` at a pinned ref and exposes these repo-scoped skills:
+
+- `smart-contract-audit`
+- `foundry-poc`
+- `tiny-auditor`
+
+The prompt explicitly requires `$smart-contract-audit` and requires forefy-style outputs:
+
+- triaged findings
+- exploit path reasoning
+- attack-path / call-flow analysis
+- realistic PoC notes when practical
+- remediation guidance
+
+## How Skill Installation Works
+
+`install-skills.sh` clones upstream skill repositories and then symlinks the selected skill directories into the caller repository’s `.agents/skills` folder.
+
+That matters because Codex officially discovers repo-scoped skills from `.agents/skills` in the working tree.
+
+The installer is:
+
+- idempotent
+- modular
+- easy to extend
+- pinned to concrete upstream refs
+
+To add another skill pack later, update only:
+
+- [`install-skills.sh`](/home/mike/Projects-2026/smart-contract-auditor/install-skills.sh)
+- [`audit-prompt.md`](/home/mike/Projects-2026/smart-contract-auditor/audit-prompt.md)
+
+## Sticky PR Comment Behavior
+
+When `post-pr-comment` is `true`, the workflow keeps one sticky comment identified by:
+
+```html
+<!-- codex-smart-contract-audit -->
+```
+
+The comment includes:
+
+- overall status
+- severity counts
+- blocked check count
+- artifact name
+
+The detailed markdown and JSON reports stay in workflow artifacts instead of spamming the PR thread.
+
+## Security Notes
+
+This workflow is designed for untrusted pull requests, but the trust model is still important.
+
+Safe defaults included here:
+
+- consumer example uses `pull_request`, not `pull_request_target`
+- checkout uses `persist-credentials: false`
+- the audit job uses only `contents: read`
+- PR write access is isolated to the comment job
+- Codex runs with `safety-strategy: drop-sudo`
+- Codex runs with `sandbox: workspace-write`
+- no extra repo write privileges are requested
+
+Also important:
+
+- do not feed raw untrusted PR descriptions or issue bodies into the prompt without sanitizing them
+- keep `OPENAI_API_KEY` scoped to the reusable workflow invocation
+- remember that blocked checks are expected in some repos, especially when Slither or deeper static analysis cannot run cleanly without additional project setup
+
+## Limitations
+
+- This repo does **not** attempt parallel multi-agent execution in v1.
+- It avoids undocumented `openai/codex-action@v1` inputs on purpose.
+- Smart contract repos vary wildly. Some checks will still block on compiler or dependency layout. When that happens, the workflow reports the block instead of pretending the check ran.
+- For forked PRs, GitHub often withholds secrets. In that case you still get artifacts, but the report will show Codex execution as blocked.
+
+## Compatibility
+
+The repo is built so the outputs can be reused outside Codex:
+
+- the prompt is mostly reviewer-agnostic markdown
+- the workflow separates orchestration from prompt content
+- the installer is independent from the report format
+- the final JSON is deterministic enough for future Claude or other reviewer tooling
+
+## Upstream Skill Licensing
+
+This repository does **not** vendor third-party skill contents into the repo tree.
+
+Instead it installs them at runtime from upstream sources:
+
+- Trail of Bits skills keep their upstream license and history
+- forefy `.context` keeps its upstream license and history
+
+Review those upstream repositories before pinning or redistributing modified versions.

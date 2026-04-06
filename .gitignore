@@ -1,0 +1,26 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local testing artifacts
+.agents/
+.codex-smart-contract-auditor/
+.codex-smart-contract-auditor-src/
+audit-report.md
+audit-report.json
+
+# Logs / temp
+*.log
+tmp/
+temp/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Node cache
+node_modules/

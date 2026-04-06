@@ -1,0 +1,533 @@
+name: Codex Smart Contract Audit
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Codex model override. Leave empty for the action default.
+        required: false
+        type: string
+        default: ""
+      effort:
+        description: Codex reasoning effort.
+        required: false
+        type: string
+        default: high
+      working-directory:
+        description: Repository subdirectory to prioritize during audit.
+        required: false
+        type: string
+        default: "."
+      severity-threshold:
+        description: Minimum severity the report should emphasize in summaries.
+        required: false
+        type: string
+        default: medium
+      fail-on-severity:
+        description: Fail the workflow when findings at or above this severity exist. Leave empty to never fail.
+        required: false
+        type: string
+        default: ""
+      post-pr-comment:
+        description: Post or update a sticky pull request summary comment.
+        required: false
+        type: boolean
+        default: true
+      extra-audit-instructions:
+        description: Extra markdown appended to the audit prompt.
+        required: false
+        type: string
+        default: ""
+      base-sha:
+        description: Optional explicit PR base SHA.
+        required: false
+        type: string
+        default: ""
+      head-sha:
+        description: Optional explicit PR head SHA.
+        required: false
+        type: string
+        default: ""
+      pr-number:
+        description: Optional explicit pull request number.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+
+concurrency:
+  group: codex-smart-contract-audit-${{ github.repository }}-${{ inputs.pr-number || github.run_id }}-${{ inputs.working-directory }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Run sequential multi-skill audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      pr_number: ${{ steps.summarize.outputs.pr_number }}
+      overall_status: ${{ steps.summarize.outputs.overall_status }}
+      critical: ${{ steps.summarize.outputs.critical }}
+      high: ${{ steps.summarize.outputs.high }}
+      medium: ${{ steps.summarize.outputs.medium }}
+      low: ${{ steps.summarize.outputs.low }}
+      informational: ${{ steps.summarize.outputs.informational }}
+      blocked_checks: ${{ steps.summarize.outputs.blocked_checks }}
+      artifact_name: ${{ steps.summarize.outputs.artifact_name }}
+    steps:
+      - name: Resolve reusable workflow source
+        id: workflow_source
+        shell: bash
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          repository="${WORKFLOW_REF%%/.github/workflows/*}"
+          ref="${WORKFLOW_REF##*@}"
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout caller repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout audit tooling repository
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ steps.workflow_source.outputs.repository }}
+          ref: ${{ steps.workflow_source.outputs.ref }}
+          path: .codex-smart-contract-auditor-src
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare workspace directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .codex-smart-contract-auditor .agents/skills
+
+      - name: Install deterministic audit prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --upgrade pip
+          python3 -m pip install --user --upgrade slither-analyzer solc-select
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve audit context
+        id: context
+        shell: bash
+        env:
+          INPUT_BASE_SHA: ${{ inputs.base-sha }}
+          INPUT_HEAD_SHA: ${{ inputs.head-sha }}
+          INPUT_PR_NUMBER: ${{ inputs.pr-number }}
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
+        run: |
+          set -euo pipefail
+
+          base_sha="$INPUT_BASE_SHA"
+          head_sha="$INPUT_HEAD_SHA"
+          pr_number="$INPUT_PR_NUMBER"
+
+          if [[ -z "$base_sha" ]]; then
+            base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
+          fi
+          if [[ -z "$head_sha" ]]; then
+            head_sha="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+          fi
+          if [[ -z "$pr_number" ]]; then
+            pr_number="$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")"
+          fi
+          if [[ -z "$head_sha" ]]; then
+            head_sha="$(git rev-parse HEAD)"
+          fi
+
+          changed_files=".codex-smart-contract-auditor/changed-files.txt"
+          if [[ -n "$base_sha" ]]; then
+            git diff --name-only "$base_sha" "$head_sha" > "$changed_files" || true
+            git diff --stat "$base_sha" "$head_sha" > .codex-smart-contract-auditor/diff-stat.txt || true
+          else
+            git ls-files > "$changed_files"
+            printf 'Base SHA unavailable; using repository file list as fallback.\n' > .codex-smart-contract-auditor/diff-stat.txt
+          fi
+
+          solidity_changes=".codex-smart-contract-auditor/solidity-changes.txt"
+          grep -E '\.(sol|vy)$' "$changed_files" > "$solidity_changes" || true
+
+          blast_radius=".codex-smart-contract-auditor/blast-radius-seeds.txt"
+          : > "$blast_radius"
+          if [[ -s "$solidity_changes" ]]; then
+            while IFS= read -r file; do
+              [[ -f "$file" ]] || continue
+              printf '%s\n' "$file" >> "$blast_radius"
+              rg --no-heading --line-number '^\s*import\s+' "$file" >> "$blast_radius" || true
+              rg --no-heading --line-number 'contract\s+.+\s+is\s+' "$file" >> "$blast_radius" || true
+            done < "$solidity_changes"
+          fi
+
+          {
+            echo "# Runtime Audit Context"
+            echo
+            echo "- Working directory: $INPUT_WORKING_DIRECTORY"
+            echo "- Severity threshold: $INPUT_SEVERITY_THRESHOLD"
+            echo "- Base SHA: ${base_sha:-unavailable}"
+            echo "- Head SHA: ${head_sha:-unavailable}"
+            echo "- Pull request number: ${pr_number:-unavailable}"
+            echo
+            echo "## Repository layout"
+            find . -maxdepth 2 \
+              \( -name 'foundry.toml' -o -name 'hardhat.config.*' -o -name 'package.json' -o -name 'pyproject.toml' -o -name 'remappings.txt' \) \
+              -print | sort || true
+            echo
+            echo "## Tool availability"
+            printf -- "- slither: %s\n" "$(command -v slither >/dev/null 2>&1 && slither --version 2>/dev/null | head -1 || echo unavailable)"
+            printf -- "- solc-select: %s\n" "$(command -v solc-select >/dev/null 2>&1 && solc-select --version 2>/dev/null | head -1 || echo unavailable)"
+            printf -- "- forge: %s\n" "$(command -v forge >/dev/null 2>&1 && forge --version 2>/dev/null | head -1 || echo unavailable)"
+            printf -- "- node: %s\n" "$(command -v node >/dev/null 2>&1 && node --version 2>/dev/null || echo unavailable)"
+            echo
+            echo "## Diff stat"
+            cat .codex-smart-contract-auditor/diff-stat.txt
+            echo
+            echo "## Changed files"
+            sed 's/^/- /' "$changed_files" || true
+            echo
+            echo "## Solidity / Vyper changes"
+            sed 's/^/- /' "$solidity_changes" || true
+            echo
+            echo "## Blast radius seeds"
+            sed 's/^/- /' "$blast_radius" || true
+            echo
+            echo "## Public / external entry points"
+            rg --no-heading --line-number 'function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*(public|external)' "$INPUT_WORKING_DIRECTORY" || true
+          } > .codex-smart-contract-auditor/runtime-context.md
+
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Install external skill packs
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x .codex-smart-contract-auditor-src/install-skills.sh
+          REPO_ROOT="$GITHUB_WORKSPACE" \
+          WORKSPACE_SKILLS_DIR="$GITHUB_WORKSPACE/.agents/skills" \
+          STATE_DIR="$GITHUB_WORKSPACE/.codex-smart-contract-auditor" \
+          ./.codex-smart-contract-auditor-src/install-skills.sh
+
+      - name: Generate runtime prompt
+        shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          INPUT_EXTRA_AUDIT_INSTRUCTIONS: ${{ inputs.extra-audit-instructions }}
+        run: |
+          set -euo pipefail
+          cat .codex-smart-contract-auditor-src/audit-prompt.md > .codex-smart-contract-auditor/prompt.md
+          {
+            echo
+            echo "---"
+            echo
+            echo "## Runtime directives"
+            echo
+            echo "- Prioritize code under: \`$INPUT_WORKING_DIRECTORY\`"
+            echo "- Treat the repository root as the output location for \`audit-report.md\` and \`audit-report.json\`."
+            echo "- Use the repo-scoped skills installed in \`.agents/skills\`."
+            echo "- If a tool is blocked by environment limits, record it in \`Blocked Checks\` instead of silently skipping it."
+            if [[ -n "$INPUT_EXTRA_AUDIT_INSTRUCTIONS" ]]; then
+              echo
+              echo "## Extra audit instructions"
+              echo
+              printf '%s\n' "$INPUT_EXTRA_AUDIT_INSTRUCTIONS"
+            fi
+            echo
+            cat .codex-smart-contract-auditor/runtime-context.md
+          } >> .codex-smart-contract-auditor/prompt.md
+
+      - name: Run Codex sequential audit
+        id: run_codex
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .codex-smart-contract-auditor/prompt.md
+          output-file: .codex-smart-contract-auditor/final-message.md
+          safety-strategy: drop-sudo
+          sandbox: workspace-write
+          codex-args: '["--full-auto"]'
+          model: ${{ inputs.model }}
+          effort: ${{ inputs.effort }}
+
+      - name: Validate or synthesize audit outputs
+        id: validate_outputs
+        shell: bash
+        env:
+          OPENAI_KEY_PRESENT: ${{ secrets.OPENAI_API_KEY != '' }}
+          CODEX_OUTCOME: ${{ steps.run_codex.outcome }}
+          BASE_SHA: ${{ steps.context.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          MODEL_INPUT: ${{ inputs.model }}
+          SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f audit-report.md ]]; then
+            {
+              printf '# Smart Contract Audit Report\n\n'
+              printf '## Executive Summary\n\n'
+              printf 'The reusable workflow did not receive a complete audit report from Codex. A fallback report was generated so the workflow still emits deterministic artifacts.\n\n'
+              printf '## Scope\n\n'
+              printf -- '- Base SHA: %s\n' "${BASE_SHA:-unavailable}"
+              printf -- '- Head SHA: %s\n' "${HEAD_SHA:-unavailable}"
+              printf -- '- Pull request number: %s\n\n' "${PR_NUMBER:-unavailable}"
+              printf '## Skills / Checks Run\n\n'
+              printf -- '- secure-workflow-guide: blocked\n'
+              printf -- '- smart-contract-audit: blocked\n\n'
+              printf '## Findings Table\n\n'
+              printf 'No confirmed findings were emitted because the audit did not complete.\n\n'
+              printf '## Blocked Checks\n\n'
+              printf -- '- Codex audit execution\n'
+              printf '  - Reason: %s\n' "$(if [[ "$OPENAI_KEY_PRESENT" != "true" ]]; then echo "OPENAI_API_KEY was not provided to the reusable workflow."; else echo "Codex action finished with outcome '$CODEX_OUTCOME' or did not write the required report files."; fi)"
+              printf '  - Next step: Provide a valid API key, confirm repository prompts are valid, and re-run the workflow.\n'
+            } > audit-report.md
+          fi
+
+          if ! jq empty audit-report.json >/dev/null 2>&1; then
+            blocked_reason="Codex did not write a valid audit-report.json file."
+            if [[ "$OPENAI_KEY_PRESENT" != "true" ]]; then
+              blocked_reason="OPENAI_API_KEY was not provided to the reusable workflow."
+            elif [[ "$CODEX_OUTCOME" == "failure" ]]; then
+              blocked_reason="Codex action failed before producing a valid JSON report."
+            fi
+
+            jq -n \
+              --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --arg repository "${GITHUB_REPOSITORY}" \
+              --arg pr_number "${PR_NUMBER:-}" \
+              --arg base_sha "${BASE_SHA:-}" \
+              --arg head_sha "${HEAD_SHA:-}" \
+              --arg model "${MODEL_INPUT:-}" \
+              --arg severity_threshold "${SEVERITY_THRESHOLD}" \
+              --arg blocked_reason "$blocked_reason" \
+              '{
+                schema_version: "1.0",
+                generated_at: $generated_at,
+                repository: $repository,
+                pr_number: (if $pr_number == "" then null else ($pr_number | tonumber?) end),
+                base_sha: $base_sha,
+                head_sha: $head_sha,
+                model: $model,
+                severity_threshold: $severity_threshold,
+                summary: {
+                  critical: 0,
+                  high: 0,
+                  medium: 0,
+                  low: 0,
+                  informational: 0,
+                  blocked_checks: 1
+                },
+                scope: {
+                  changed_files: [],
+                  blast_radius_files: [],
+                  contracts_reviewed: [],
+                  tests_reviewed: []
+                },
+                checks_run: [
+                  {
+                    name: "secure-workflow-guide",
+                    source: "trail-of-bits",
+                    status: "blocked",
+                    notes: $blocked_reason
+                  },
+                  {
+                    name: "smart-contract-audit",
+                    source: "forefy",
+                    status: "blocked",
+                    notes: $blocked_reason
+                  }
+                ],
+                findings: [],
+                security_properties: [],
+                blocked_checks: [
+                  {
+                    check: "codex-sequential-audit",
+                    reason: $blocked_reason,
+                    next_step: "Provide OPENAI_API_KEY and re-run the workflow."
+                  }
+                ]
+              }' > audit-report.json
+          fi
+
+          jq empty audit-report.json >/dev/null
+
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-results
+          retention-days: 14
+          path: |
+            audit-report.md
+            audit-report.json
+            .codex-smart-contract-auditor/final-message.md
+            .codex-smart-contract-auditor/runtime-context.md
+            .codex-smart-contract-auditor/prompt.md
+            .codex-smart-contract-auditor/installed-skills.txt
+
+      - name: Summarize audit result
+        id: summarize
+        shell: bash
+        env:
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          critical="$(jq -r '.summary.critical // 0' audit-report.json)"
+          high="$(jq -r '.summary.high // 0' audit-report.json)"
+          medium="$(jq -r '.summary.medium // 0' audit-report.json)"
+          low="$(jq -r '.summary.low // 0' audit-report.json)"
+          informational="$(jq -r '.summary.informational // 0' audit-report.json)"
+          blocked_checks="$(jq -r '.summary.blocked_checks // 0' audit-report.json)"
+
+          overall_status="clean"
+          if (( critical + high + medium + low + informational > 0 )); then
+            overall_status="findings"
+          fi
+          if (( blocked_checks > 0 )) && [[ "$overall_status" == "clean" ]]; then
+            overall_status="blocked"
+          fi
+
+          echo "artifact_name=audit-results" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "overall_status=$overall_status" >> "$GITHUB_OUTPUT"
+          echo "critical=$critical" >> "$GITHUB_OUTPUT"
+          echo "high=$high" >> "$GITHUB_OUTPUT"
+          echo "medium=$medium" >> "$GITHUB_OUTPUT"
+          echo "low=$low" >> "$GITHUB_OUTPUT"
+          echo "informational=$informational" >> "$GITHUB_OUTPUT"
+          echo "blocked_checks=$blocked_checks" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce severity threshold
+        if: ${{ inputs.fail-on-severity != '' }}
+        shell: bash
+        env:
+          THRESHOLD: ${{ inputs.fail-on-severity }}
+        run: |
+          set -euo pipefail
+          critical="$(jq -r '.summary.critical // 0' audit-report.json)"
+          high="$(jq -r '.summary.high // 0' audit-report.json)"
+          medium="$(jq -r '.summary.medium // 0' audit-report.json)"
+          low="$(jq -r '.summary.low // 0' audit-report.json)"
+          informational="$(jq -r '.summary.informational // 0' audit-report.json)"
+
+          case "$THRESHOLD" in
+            critical) total=$critical ;;
+            high) total=$((critical + high)) ;;
+            medium) total=$((critical + high + medium)) ;;
+            low) total=$((critical + high + medium + low)) ;;
+            informational) total=$((critical + high + medium + low + informational)) ;;
+            *)
+              echo "Unsupported fail-on-severity value: $THRESHOLD" >&2
+              exit 1
+              ;;
+          esac
+
+          if (( total > 0 )); then
+            echo "Found $total finding(s) at or above severity '$THRESHOLD'." >&2
+            exit 1
+          fi
+
+  comment:
+    name: Update sticky pull request comment
+    runs-on: ubuntu-latest
+    needs: audit
+    if: ${{ always() && inputs.post-pr-comment && needs.audit.outputs.pr_number != '' }}
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download audit artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.audit.outputs.artifact_name }}
+
+      - name: Upsert sticky summary comment
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.audit.outputs.pr_number }}
+          OVERALL_STATUS: ${{ needs.audit.outputs.overall_status }}
+          CRITICAL: ${{ needs.audit.outputs.critical }}
+          HIGH: ${{ needs.audit.outputs.high }}
+          MEDIUM: ${{ needs.audit.outputs.medium }}
+          LOW: ${{ needs.audit.outputs.low }}
+          INFORMATIONAL: ${{ needs.audit.outputs.informational }}
+          BLOCKED_CHECKS: ${{ needs.audit.outputs.blocked_checks }}
+          ARTIFACT_NAME: ${{ needs.audit.outputs.artifact_name }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- codex-smart-contract-audit -->";
+            const prNumber = Number(process.env.PR_NUMBER);
+            const report = JSON.parse(fs.readFileSync("audit-report.json", "utf8"));
+
+            const lines = [
+              marker,
+              "## Codex Smart Contract Audit",
+              "",
+              `Status: **${process.env.OVERALL_STATUS}**`,
+              "",
+              "| Severity | Count |",
+              "| --- | ---: |",
+              `| Critical | ${process.env.CRITICAL} |`,
+              `| High | ${process.env.HIGH} |`,
+              `| Medium | ${process.env.MEDIUM} |`,
+              `| Low | ${process.env.LOW} |`,
+              `| Informational | ${process.env.INFORMATIONAL} |`,
+              `| Blocked checks | ${process.env.BLOCKED_CHECKS} |`,
+              "",
+              `Artifacts: \`${process.env.ARTIFACT_NAME}\``,
+              "",
+              "The full markdown report and machine-readable JSON report are attached to this workflow run as artifacts."
+            ];
+
+            if ((report.blocked_checks || []).length > 0) {
+              lines.push("");
+              lines.push("Blocked checks:");
+              for (const blocked of report.blocked_checks.slice(0, 3)) {
+                lines.push(`- ${blocked.check}: ${blocked.reason}`);
+              }
+            }
+
+            const body = lines.join("\n");
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
