@@ -8,6 +8,7 @@ Thumbs.db
 
 # Local testing artifacts
 .agents/
+.context/
 .codex-smart-contract-auditor/
 .codex-smart-contract-auditor-src/
 audit-report.md
@@ -24,3 +25,4 @@ __pycache__/
 
 # Node cache
 node_modules/
+.codex

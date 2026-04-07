@@ -17,14 +17,17 @@ The reusable workflow:
 2. Installs deterministic audit prerequisites such as Slither.
 3. Installs external skill packs from their upstream repositories at pinned refs.
 4. Exposes the selected skills to Codex through repo-scoped `.agents/skills`.
-5. Builds a runtime audit prompt with PR and blast-radius context.
+5. Builds a runtime audit prompt with PR context, blast radius, entry-point surfaces, token surfaces, and upgrade surfaces.
 6. Runs a **sequential** Codex audit:
    - `$secure-workflow-guide`
    - `$smart-contract-audit`
+   - deterministically triggered helper skills when needed, such as `$token-integration-analyzer`, `$entry-point-analyzer`, and `$foundry-poc`
    - merged final report
 7. Uploads:
    - `audit-report.md`
    - `audit-report.json`
+   - `.codex-smart-contract-auditor/preflight/`
+   - `.context/outputs/`
 8. Optionally updates a sticky PR comment with severity counts and blocked-check status.
 
 ## Why Sequential
@@ -39,6 +42,7 @@ That is the better reusable default for smart contract audits:
 - simpler artifact handling
 - cleaner merged output
 - easier debugging when a required skill is blocked
+- better preservation of raw audit evidence
 
 Parallel execution is possible later, but it adds duplication, merging complexity, and more ways for a reusable workflow to fail noisily.
 
@@ -106,6 +110,19 @@ The reusable workflow supports these inputs:
 - `head-sha`: optional explicit head SHA
 - `pr-number`: optional explicit pull request number
 
+## Evidence Artifacts
+
+This repo now preserves more than the merged summary.
+
+Uploaded artifacts include:
+
+- `audit-report.md`
+- `audit-report.json`
+- `.codex-smart-contract-auditor/preflight/` for deterministic preflight evidence
+- `.context/outputs/` for raw forefy output directories
+
+That matters because the upstream forefy framework expects persistent numbered audit outputs, and the Trail of Bits workflow is materially stronger when the generated summaries and diagrams are kept instead of paraphrased away.
+
 ## What The Report Contains
 
 `audit-report.md` contains the merged human-readable report with these sections:
@@ -136,6 +153,7 @@ The JSON includes:
 - changed and reviewed scope
 - checks run
 - findings with source skills
+- triager status and artifact paths when available
 - security properties to add
 - blocked checks
 
@@ -169,10 +187,24 @@ This repo installs `forefy/.context` at a pinned ref and exposes these repo-scop
 The prompt explicitly requires `$smart-contract-audit` and requires forefy-style outputs:
 
 - triaged findings
+- multi-expert analysis
+- triager validation
 - exploit path reasoning
 - attack-path / call-flow analysis
 - realistic PoC notes when practical
 - remediation guidance
+
+It also preserves the raw numbered `.context/outputs/X/` audit trail instead of replacing it with only a top-level summary.
+
+## Deterministic Helper Skill Triggers
+
+For maximum rigor, the prompt now treats certain helper-skill invocations as required when their trigger conditions are present:
+
+- token-related blast radius -> `token-integration-analyzer`
+- changed external, admin, governance, or upgrade surfaces -> `entry-point-analyzer`
+- plausible high-severity exploit plus Foundry availability -> `foundry-poc`
+
+This is a better fit for the upstream skill design than leaving helper skills entirely discretionary.
 
 ## How Skill Installation Works
 
@@ -222,6 +254,13 @@ Safe defaults included here:
 - Codex runs with `safety-strategy: drop-sudo`
 - Codex runs with `sandbox: workspace-write`
 - no extra repo write privileges are requested
+- deterministic preflight artifacts are generated before the model runs
+
+Additional rigor-oriented setup:
+
+- installs `graphviz` so Trail of Bits visual outputs are less likely to block
+- installs Foundry on the runner when a `foundry.toml` repo is detected and `forge` is missing
+- runs best-effort preflight Slither summaries before the model starts
 
 Also important:
 

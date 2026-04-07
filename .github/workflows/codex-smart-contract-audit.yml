@@ -110,15 +110,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .codex-smart-contract-auditor .agents/skills
+          mkdir -p .codex-smart-contract-auditor/preflight .agents/skills .context/outputs
 
       - name: Install deterministic audit prerequisites
         shell: bash
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y graphviz ripgrep jq
           python3 -m pip install --user --upgrade pip
           python3 -m pip install --user --upgrade slither-analyzer solc-select
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Detect Solidity toolchain layout
+        id: toolchain_layout
+        shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          set -euo pipefail
+          workdir="$INPUT_WORKING_DIRECTORY"
+
+          foundry=false
+          hardhat=false
+
+          [[ -f "$workdir/foundry.toml" ]] && foundry=true
+          compgen -G "$workdir/hardhat.config.*" >/dev/null && hardhat=true || true
+
+          echo "foundry=$foundry" >> "$GITHUB_OUTPUT"
+          echo "hardhat=$hardhat" >> "$GITHUB_OUTPUT"
+
+      - name: Install Foundry when a Foundry repo is detected
+        if: ${{ steps.toolchain_layout.outputs.foundry == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v forge >/dev/null 2>&1; then
+            exit 0
+          fi
+          curl -L https://foundry.paradigm.xyz | bash
+          "$HOME/.foundry/bin/foundryup"
+          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
 
       - name: Resolve audit context
         id: context
@@ -135,6 +167,7 @@ jobs:
           base_sha="$INPUT_BASE_SHA"
           head_sha="$INPUT_HEAD_SHA"
           pr_number="$INPUT_PR_NUMBER"
+          preflight_dir=".codex-smart-contract-auditor/preflight"
 
           if [[ -z "$base_sha" ]]; then
             base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
@@ -149,19 +182,42 @@ jobs:
             head_sha="$(git rev-parse HEAD)"
           fi
 
-          changed_files=".codex-smart-contract-auditor/changed-files.txt"
+          changed_files="$preflight_dir/changed-files.txt"
           if [[ -n "$base_sha" ]]; then
             git diff --name-only "$base_sha" "$head_sha" > "$changed_files" || true
-            git diff --stat "$base_sha" "$head_sha" > .codex-smart-contract-auditor/diff-stat.txt || true
+            git diff --stat "$base_sha" "$head_sha" > "$preflight_dir/diff-stat.txt" || true
           else
             git ls-files > "$changed_files"
-            printf 'Base SHA unavailable; using repository file list as fallback.\n' > .codex-smart-contract-auditor/diff-stat.txt
+            printf 'Base SHA unavailable; using repository file list as fallback.\n' > "$preflight_dir/diff-stat.txt"
           fi
 
-          solidity_changes=".codex-smart-contract-auditor/solidity-changes.txt"
+          solidity_changes="$preflight_dir/solidity-changes.txt"
           grep -E '\.(sol|vy)$' "$changed_files" > "$solidity_changes" || true
 
-          blast_radius=".codex-smart-contract-auditor/blast-radius-seeds.txt"
+          contract_files="$preflight_dir/contract-files.txt"
+          test_files="$preflight_dir/test-files.txt"
+          script_files="$preflight_dir/script-files.txt"
+          entry_points="$preflight_dir/public-entry-points.txt"
+          privileged_entry_points="$preflight_dir/privileged-entry-points.txt"
+          token_surface="$preflight_dir/token-surface.txt"
+          upgrade_surface="$preflight_dir/upgrade-surface.txt"
+          access_control_surface="$preflight_dir/access-control-surface.txt"
+          blast_radius="$preflight_dir/blast-radius-seeds.txt"
+
+          find "$INPUT_WORKING_DIRECTORY" -type f \( -name '*.sol' -o -name '*.vy' \) | sort > "$contract_files" || true
+          find "$INPUT_WORKING_DIRECTORY" -type f \
+            \( -path '*/test/*' -o -path '*/tests/*' -o -name '*.t.sol' -o -name '*Test.sol' -o -name '*.spec.ts' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.test.js' \) \
+            | sort > "$test_files" || true
+          find "$INPUT_WORKING_DIRECTORY" -type f \
+            \( -path '*/script/*' -o -path '*/scripts/*' -o -name '*Deploy*.s.sol' -o -name '*deploy*.ts' -o -name '*deploy*.js' \) \
+            | sort > "$script_files" || true
+
+          rg --no-heading --line-number 'function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*(public|external)' "$INPUT_WORKING_DIRECTORY" > "$entry_points" || true
+          rg --no-heading --line-number 'function\s+[A-Za-z0-9_]+\s*\([^)]*\)[^{;]*\b(onlyOwner|onlyRole|auth|requiresAuth|governor|admin)\b' "$INPUT_WORKING_DIRECTORY" > "$privileged_entry_points" || true
+          rg --no-heading --line-number 'IERC20|IERC721|IERC1155|ERC20|ERC721|ERC1155|transferFrom|safeTransferFrom|approve\(|permit\(' "$INPUT_WORKING_DIRECTORY" > "$token_surface" || true
+          rg --no-heading --line-number 'UUPSUpgradeable|TransparentUpgradeableProxy|ERC1967|ProxyAdmin|upgradeTo|upgradeToAndCall|initializer|reinitializer' "$INPUT_WORKING_DIRECTORY" > "$upgrade_surface" || true
+          rg --no-heading --line-number 'onlyOwner|onlyRole|AccessControl|Ownable|auth|governor|timelock|multisig|pause\(|unpause\(' "$INPUT_WORKING_DIRECTORY" > "$access_control_surface" || true
+
           : > "$blast_radius"
           if [[ -s "$solidity_changes" ]]; then
             while IFS= read -r file; do
@@ -193,10 +249,19 @@ jobs:
             printf -- "- node: %s\n" "$(command -v node >/dev/null 2>&1 && node --version 2>/dev/null || echo unavailable)"
             echo
             echo "## Diff stat"
-            cat .codex-smart-contract-auditor/diff-stat.txt
+            cat "$preflight_dir/diff-stat.txt"
             echo
             echo "## Changed files"
             sed 's/^/- /' "$changed_files" || true
+            echo
+            echo "## Contract inventory"
+            sed 's/^/- /' "$contract_files" || true
+            echo
+            echo "## Test inventory"
+            sed 's/^/- /' "$test_files" || true
+            echo
+            echo "## Script inventory"
+            sed 's/^/- /' "$script_files" || true
             echo
             echo "## Solidity / Vyper changes"
             sed 's/^/- /' "$solidity_changes" || true
@@ -205,8 +270,34 @@ jobs:
             sed 's/^/- /' "$blast_radius" || true
             echo
             echo "## Public / external entry points"
-            rg --no-heading --line-number 'function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*(public|external)' "$INPUT_WORKING_DIRECTORY" || true
+            cat "$entry_points" || true
+            echo
+            echo "## Privileged entry points"
+            cat "$privileged_entry_points" || true
+            echo
+            echo "## Token surface"
+            cat "$token_surface" || true
+            echo
+            echo "## Upgrade surface"
+            cat "$upgrade_surface" || true
+            echo
+            echo "## Access control surface"
+            cat "$access_control_surface" || true
           } > .codex-smart-contract-auditor/runtime-context.md
+
+          {
+            echo "# Deterministic Preflight Summary"
+            echo
+            printf -- "- Changed files: %s\n" "$(wc -l < "$changed_files" | tr -d ' ')"
+            printf -- "- Solidity/Vyper changes: %s\n" "$(wc -l < "$solidity_changes" | tr -d ' ')"
+            printf -- "- Contracts discovered: %s\n" "$(wc -l < "$contract_files" | tr -d ' ')"
+            printf -- "- Tests discovered: %s\n" "$(wc -l < "$test_files" | tr -d ' ')"
+            printf -- "- Scripts discovered: %s\n" "$(wc -l < "$script_files" | tr -d ' ')"
+            printf -- "- Public/external entry points: %s\n" "$(wc -l < "$entry_points" | tr -d ' ')"
+            printf -- "- Privileged entry points: %s\n" "$(wc -l < "$privileged_entry_points" | tr -d ' ')"
+            printf -- "- Token surface hits: %s\n" "$(wc -l < "$token_surface" | tr -d ' ')"
+            printf -- "- Upgrade surface hits: %s\n" "$(wc -l < "$upgrade_surface" | tr -d ' ')"
+          } > "$preflight_dir/summary.md"
 
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
@@ -221,6 +312,58 @@ jobs:
           WORKSPACE_SKILLS_DIR="$GITHUB_WORKSPACE/.agents/skills" \
           STATE_DIR="$GITHUB_WORKSPACE/.codex-smart-contract-auditor" \
           ./.codex-smart-contract-auditor-src/install-skills.sh
+
+      - name: Run deterministic preflight scans
+        shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          HAS_FOUNDRY: ${{ steps.toolchain_layout.outputs.foundry }}
+        run: |
+          set -euo pipefail
+          preflight_dir=".codex-smart-contract-auditor/preflight"
+          blockers="$preflight_dir/tool-blockers.md"
+          checks="$preflight_dir/preflight-checks.md"
+          contract_files="$preflight_dir/contract-files.txt"
+
+          : > "$blockers"
+          : > "$checks"
+
+          run_preflight_scan() {
+            local label="$1"
+            shift
+            local out="$preflight_dir/${label}.txt"
+            local err="$preflight_dir/${label}.stderr"
+            if timeout 600s "$@" >"$out" 2>"$err"; then
+              printf -- "- %s: ok\n" "$label" >> "$checks"
+            else
+              printf -- "- %s: blocked\n" "$label" >> "$checks"
+              {
+                printf '## %s\n' "$label"
+                if [[ -s "$err" ]]; then
+                  head -40 "$err"
+                else
+                  printf 'Command exited without stderr output.\n'
+                fi
+                printf '\n'
+              } >> "$blockers"
+              rm -f "$out"
+            fi
+          }
+
+          if [[ -s "$contract_files" ]]; then
+            run_preflight_scan "slither-human-summary" slither "$INPUT_WORKING_DIRECTORY" --exclude-dependencies --print human-summary
+            run_preflight_scan "slither-contract-summary" slither "$INPUT_WORKING_DIRECTORY" --exclude-dependencies --print contract-summary
+            run_preflight_scan "slither-function-summary" slither "$INPUT_WORKING_DIRECTORY" --exclude-dependencies --print function-summary
+            run_preflight_scan "slither-vars-and-auth" slither "$INPUT_WORKING_DIRECTORY" --exclude-dependencies --print vars-and-auth
+          else
+            printf '## slither-preflight\nNo Solidity or Vyper contracts detected under %s.\n' "$INPUT_WORKING_DIRECTORY" >> "$blockers"
+          fi
+
+          if [[ "$HAS_FOUNDRY" == "true" ]] && command -v forge >/dev/null 2>&1; then
+            run_preflight_scan "forge-test-list" forge test --root "$INPUT_WORKING_DIRECTORY" --list
+          else
+            printf '## forge-test-list\nFoundry not detected or forge is unavailable.\n' >> "$blockers"
+          fi
 
       - name: Generate runtime prompt
         shell: bash
@@ -239,6 +382,8 @@ jobs:
             echo "- Prioritize code under: \`$INPUT_WORKING_DIRECTORY\`"
             echo "- Treat the repository root as the output location for \`audit-report.md\` and \`audit-report.json\`."
             echo "- Use the repo-scoped skills installed in \`.agents/skills\`."
+            echo "- Preserve raw forefy artifacts in \`.context/outputs/X/\` and do not overwrite existing numbered runs."
+            echo "- Use preflight evidence from \`.codex-smart-contract-auditor/preflight/\` when present."
             echo "- If a tool is blocked by environment limits, record it in \`Blocked Checks\` instead of silently skipping it."
             if [[ -n "$INPUT_EXTRA_AUDIT_INSTRUCTIONS" ]]; then
               echo
@@ -345,13 +490,15 @@ jobs:
                     name: "secure-workflow-guide",
                     source: "trail-of-bits",
                     status: "blocked",
-                    notes: $blocked_reason
+                    notes: $blocked_reason,
+                    artifact_paths: [".codex-smart-contract-auditor/preflight"]
                   },
                   {
                     name: "smart-contract-audit",
                     source: "forefy",
                     status: "blocked",
-                    notes: $blocked_reason
+                    notes: $blocked_reason,
+                    artifact_paths: [".context/outputs"]
                   }
                 ],
                 findings: [],
@@ -361,6 +508,24 @@ jobs:
                     check: "codex-sequential-audit",
                     reason: $blocked_reason,
                     next_step: "Provide OPENAI_API_KEY and re-run the workflow."
+                  }
+                ],
+                artifacts: [
+                  {
+                    path: ".codex-smart-contract-auditor/preflight",
+                    kind: "preflight"
+                  },
+                  {
+                    path: ".context/outputs",
+                    kind: "forefy-output"
+                  },
+                  {
+                    path: "audit-report.md",
+                    kind: "report"
+                  },
+                  {
+                    path: "audit-report.json",
+                    kind: "json"
                   }
                 ]
               }' > audit-report.json
@@ -377,9 +542,11 @@ jobs:
           path: |
             audit-report.md
             audit-report.json
+            .context/outputs
             .codex-smart-contract-auditor/final-message.md
             .codex-smart-contract-auditor/runtime-context.md
             .codex-smart-contract-auditor/prompt.md
+            .codex-smart-contract-auditor/preflight
             .codex-smart-contract-auditor/installed-skills.txt
 
       - name: Summarize audit result

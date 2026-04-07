@@ -97,7 +97,7 @@ install_selected_skills() {
   # helpers from the same maintained repository.
   link_skill "$TRAILOFBITS_HOME/plugins/building-secure-contracts/skills/secure-workflow-guide" "secure-workflow-guide"
   link_skill "$TRAILOFBITS_HOME/plugins/building-secure-contracts/skills/token-integration-analyzer" "token-integration-analyzer"
-  link_skill "$TRAILOFBITS_HOME/plugins/building-secure-contracts/skills/entry-point-analyzer" "entry-point-analyzer"
+  link_skill "$TRAILOFBITS_HOME/plugins/entry-point-analyzer/skills/entry-point-analyzer" "entry-point-analyzer"
   link_skill "$TRAILOFBITS_HOME/plugins/building-secure-contracts/skills/guidelines-advisor" "guidelines-advisor"
 
   # forefy ships a real skill layout rooted at `.context/skills/...`; expose the
