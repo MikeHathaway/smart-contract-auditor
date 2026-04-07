@@ -1,6 +1,6 @@
 # codex-smart-contract-auditor
 
-`codex-smart-contract-auditor` is a reusable GitHub Actions repository for **maximum-depth, sequential smart contract audits on pull requests**.
+`codex-smart-contract-auditor` is a reusable GitHub Actions repository for **maximum-depth, sequential smart contract audits on pull requests and branch snapshots**.
 
 It wires together two required audit skill families:
 
@@ -19,7 +19,7 @@ The reusable workflow:
 2. Installs deterministic audit prerequisites such as Slither.
 3. Installs external skill packs from their upstream repositories at pinned refs.
 4. Exposes the selected skills to Codex through repo-scoped `.agents/skills`.
-5. Builds a runtime audit prompt with PR context, blast radius, entry-point surfaces, token surfaces, and upgrade surfaces.
+5. Builds a runtime audit prompt with audit mode, scope context, blast radius, entry-point surfaces, token surfaces, and upgrade surfaces.
 6. Runs a **sequential** Codex audit:
    - `$secure-workflow-guide`
    - `$smart-contract-audit`
@@ -69,6 +69,7 @@ jobs:
     uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
       provider: auto
+      audit-mode: pr
       model: ""
       effort: ""
       severity-threshold: medium
@@ -86,6 +87,7 @@ Ready-to-copy consumer workflows:
 
 - generic provider-aware example: [`.github/workflows/example-consumer.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer.yml)
 - Venice-only example: [`.github/workflows/example-consumer-venice.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-venice.yml)
+- manual `main` snapshot example: [`.github/workflows/example-consumer-manual-main.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-manual-main.yml)
 
 If you are consuming this repository directly, keep the `uses:` target pointed at `MikeHathaway/smart-contract-auditor`. Only change it if you fork or republish the reusable workflow under a different owner, repository, or ref.
 
@@ -108,7 +110,7 @@ Use an organization secret if you want to share one provider key across multiple
 
 ## Quick Setup Guide
 
-For a typical Venice-backed setup:
+For a typical Venice-backed pull request setup:
 
 1. In the repository you want to audit, go to `Settings` -> `Secrets and variables` -> `Actions`.
 2. Under `Repository secrets`, create `VENICE_API_KEY`.
@@ -135,6 +137,7 @@ The audit job itself uses only `contents: read`. PR write access is isolated to 
 The reusable workflow supports these inputs:
 
 - `provider`: `auto`, `openai`, or `venice`; defaults to `auto`
+- `audit-mode`: `pr` or `snapshot`; defaults to `pr`
 - `model`: optional Codex model override
 - `effort`: optional Codex reasoning effort override
 - `responses-api-endpoint`: optional Responses API endpoint override
@@ -143,9 +146,9 @@ The reusable workflow supports these inputs:
 - `fail-on-severity`: fail the workflow when findings at or above this severity exist
 - `post-pr-comment`: enable or disable sticky PR comments
 - `extra-audit-instructions`: append extra markdown instructions to the runtime prompt
-- `base-sha`: optional explicit base SHA
+- `base-sha`: optional explicit base SHA, primarily for `audit-mode: pr`
 - `head-sha`: optional explicit head SHA
-- `pr-number`: optional explicit pull request number
+- `pr-number`: optional explicit pull request number, primarily for `audit-mode: pr`
 
 Provider defaults are intentionally asymmetric:
 
@@ -167,6 +170,23 @@ The reusable workflow still exposes one public entrypoint, but the largest imple
 
 That keeps provider selection, preflight logic, fallback artifact generation, and sticky-comment behavior easier to review and change without growing the workflow YAML further.
 
+## Branch Snapshot Mode
+
+The reusable workflow now supports a first-class snapshot mode:
+
+- `audit-mode: pr`
+  - differential-first pull request review
+  - uses PR context when available
+  - PR comments make sense here
+- `audit-mode: snapshot`
+  - full checked-out branch audit
+  - no PR context is assumed
+  - best for manual `main` or release-branch audits
+
+In snapshot mode, the workflow treats the entire checked-out tree as in-scope rather than pretending there is a meaningful PR diff.
+
+There is a ready-to-copy manual snapshot example in [`.github/workflows/example-consumer-manual-main.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-manual-main.yml).
+
 ## Venice Setup
 
 To force Venice as the backing Responses provider:
@@ -177,6 +197,7 @@ jobs:
     uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
       provider: venice
+      audit-mode: pr
       model: ""
       effort: ""
     secrets:
@@ -214,7 +235,7 @@ That matters because the upstream forefy framework expects persistent numbered a
 
 1. Executive Summary
 2. Scope
-3. PR / Diff Context
+3. PR / Diff Context or Snapshot Context
 4. Blast Radius
 5. Skills / Checks Run
 6. Findings Table
@@ -235,6 +256,7 @@ That matters because the upstream forefy framework expects persistent numbered a
 The JSON includes:
 
 - severity counts
+- audit mode
 - changed and reviewed scope
 - checks run
 - findings with source skills
@@ -328,7 +350,7 @@ The detailed markdown and JSON reports stay in workflow artifacts instead of spa
 
 ## Security Notes
 
-This workflow is designed for untrusted pull requests, but the trust model is still important.
+This workflow is primarily designed for untrusted pull requests, but the same trust model also matters for manual branch snapshot audits.
 
 Safe defaults included here:
 

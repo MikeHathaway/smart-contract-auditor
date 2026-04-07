@@ -1,0 +1,25 @@
+name: Manual Main Snapshot Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
+    with:
+      provider: auto
+      audit-mode: snapshot
+      model: ""
+      effort: ""
+      working-directory: .
+      severity-threshold: medium
+      fail-on-severity: high
+      post-pr-comment: false
+      pr-number: ""
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}

@@ -1,6 +1,11 @@
 # Codex Smart Contract Audit
 
-Run a **maximum-depth, sequential, multi-skill smart contract audit** for this pull request.
+Run a **maximum-depth, sequential, multi-skill smart contract audit** for the target declared in the runtime context.
+
+The runtime context will tell you whether this is:
+
+- a pull request audit (`audit mode: pr`)
+- or a full checked-out branch snapshot audit (`audit mode: snapshot`)
 
 ## Non-negotiable execution order
 
@@ -14,7 +19,13 @@ Do not skip either required skill. If one cannot run fully, record that in `Bloc
 
 ## Audit scope rules
 
-- Be **differential first**: start with the PR diff.
+- If `audit mode: pr`, be **differential first**: start with the PR diff.
+- If `audit mode: snapshot`, treat the full checked-out branch state as in-scope and prioritize:
+  - externally callable entry points
+  - privileged or governance surfaces
+  - upgrade paths
+  - token integrations
+  - high-value state transitions
 - Then expand into the true blast radius:
   - changed files
   - directly imported files
@@ -143,7 +154,7 @@ Use this structure:
 
 1. Executive Summary
 2. Scope
-3. PR / Diff Context
+3. PR / Diff Context or Snapshot Context
 4. Blast Radius
 5. Skills / Checks Run
 6. Trail of Bits Workflow Checklist
@@ -173,6 +184,7 @@ Use this schema shape:
   "pr_number": 123,
   "base_sha": "abc",
   "head_sha": "def",
+  "audit_mode": "pr|snapshot",
   "model": "string",
   "severity_threshold": "medium",
   "summary": {

@@ -18,6 +18,7 @@ jobs:
     uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
       provider: venice
+      audit-mode: pr
       # Leave model/effort blank to use the workflow's Venice defaults:
       # - model: openai-gpt-54
       # - effort: high

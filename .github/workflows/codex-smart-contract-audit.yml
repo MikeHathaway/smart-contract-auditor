@@ -28,6 +28,11 @@ on:
         required: false
         type: string
         default: "."
+      audit-mode:
+        description: Audit mode. Use `pr` for differential pull request review or `snapshot` for a full branch snapshot audit.
+        required: false
+        type: string
+        default: pr
       severity-threshold:
         description: Minimum severity the report should emphasize in summaries.
         required: false
@@ -39,7 +44,7 @@ on:
         type: string
         default: ""
       post-pr-comment:
-        description: Post or update a sticky pull request summary comment.
+        description: "Post or update a sticky pull request summary comment. Mostly relevant in `audit-mode: pr`."
         required: false
         type: boolean
         default: true
@@ -49,17 +54,17 @@ on:
         type: string
         default: ""
       base-sha:
-        description: Optional explicit PR base SHA.
+        description: "Optional explicit PR base SHA. Ignored in `audit-mode: snapshot`."
         required: false
         type: string
         default: ""
       head-sha:
-        description: Optional explicit PR head SHA.
+        description: Optional explicit head SHA. In snapshot mode this can identify the audited branch state.
         required: false
         type: string
         default: ""
       pr-number:
-        description: Optional explicit pull request number.
+        description: Optional explicit pull request number. Ignored unless you want PR-linked behavior.
         required: false
         type: string
         default: ""
@@ -86,6 +91,7 @@ jobs:
     outputs:
       workflow_repository: ${{ steps.workflow_source.outputs.repository }}
       workflow_ref: ${{ steps.workflow_source.outputs.ref }}
+      audit_mode: ${{ steps.context.outputs.audit_mode }}
       pr_number: ${{ steps.summarize.outputs.pr_number }}
       overall_status: ${{ steps.summarize.outputs.overall_status }}
       critical: ${{ steps.summarize.outputs.critical }}
@@ -187,6 +193,7 @@ jobs:
           INPUT_HEAD_SHA: ${{ inputs.head-sha }}
           INPUT_PR_NUMBER: ${{ inputs.pr-number }}
           INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          INPUT_AUDIT_MODE: ${{ inputs.audit-mode }}
           INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
           HAS_FOUNDRY: ${{ steps.toolchain_layout.outputs.foundry }}
         run: |
@@ -197,6 +204,7 @@ jobs:
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          INPUT_AUDIT_MODE: ${{ steps.context.outputs.audit_mode }}
           INPUT_EXTRA_AUDIT_INSTRUCTIONS: ${{ inputs.extra-audit-instructions }}
         run: |
           set -euo pipefail
@@ -207,11 +215,13 @@ jobs:
             echo
             echo "## Runtime directives"
             echo
+            echo "- Audit mode: \`$INPUT_AUDIT_MODE\`"
             echo "- Prioritize code under: \`$INPUT_WORKING_DIRECTORY\`"
             echo "- Treat the repository root as the output location for \`audit-report.md\` and \`audit-report.json\`."
             echo "- Use the repo-scoped skills installed in \`.agents/skills\`."
             echo "- Preserve raw forefy artifacts in \`.context/outputs/X/\` and do not overwrite existing numbered runs."
             echo "- Use preflight evidence from \`.codex-smart-contract-auditor/preflight/\` when present."
+            echo "- If audit mode is \`snapshot\`, treat this as a full checked-out branch audit rather than a PR diff review."
             echo "- If a tool is blocked by environment limits, record it in \`Blocked Checks\` instead of silently skipping it."
             if [[ -n "$INPUT_EXTRA_AUDIT_INSTRUCTIONS" ]]; then
               echo
@@ -319,6 +329,7 @@ jobs:
           PROVIDER_KEY_SOURCE: ${{ steps.provider_config.outputs.key_source }}
           RESPONSES_API_ENDPOINT: ${{ steps.provider_config.outputs.responses_api_endpoint }}
           CODEX_OUTCOME: ${{ steps.run_codex.outcome }}
+          AUDIT_MODE: ${{ steps.context.outputs.audit_mode }}
           BASE_SHA: ${{ steps.context.outputs.base_sha }}
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}

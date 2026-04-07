@@ -6,6 +6,7 @@ provider="${PROVIDER:-openai}"
 provider_key_source="${PROVIDER_KEY_SOURCE:-}"
 responses_api_endpoint="${RESPONSES_API_ENDPOINT:-}"
 codex_outcome="${CODEX_OUTCOME:-}"
+audit_mode="${AUDIT_MODE:-pr}"
 base_sha="${BASE_SHA:-}"
 head_sha="${HEAD_SHA:-}"
 pr_number="${PR_NUMBER:-}"
@@ -18,9 +19,14 @@ if [[ ! -f audit-report.md ]]; then
     printf '## Executive Summary\n\n'
     printf 'The reusable workflow did not receive a complete audit report from Codex. A fallback report was generated so the workflow still emits deterministic artifacts.\n\n'
     printf '## Scope\n\n'
+    printf -- '- Audit mode: %s\n' "${audit_mode:-pr}"
     printf -- '- Base SHA: %s\n' "${base_sha:-unavailable}"
     printf -- '- Head SHA: %s\n' "${head_sha:-unavailable}"
-    printf -- '- Pull request number: %s\n\n' "${pr_number:-unavailable}"
+    if [[ "$audit_mode" == "snapshot" ]]; then
+      printf -- '- Pull request number: not applicable\n\n'
+    else
+      printf -- '- Pull request number: %s\n\n' "${pr_number:-unavailable}"
+    fi
     printf '## Skills / Checks Run\n\n'
     printf -- '- secure-workflow-guide: blocked\n'
     printf -- '- smart-contract-audit: blocked\n\n'
@@ -47,6 +53,7 @@ if ! jq empty audit-report.json >/dev/null 2>&1; then
     --arg pr_number "${pr_number:-}" \
     --arg base_sha "${base_sha:-}" \
     --arg head_sha "${head_sha:-}" \
+    --arg audit_mode "${audit_mode:-pr}" \
     --arg model "${model_input:-}" \
     --arg provider "${provider:-openai}" \
     --arg provider_key_source "${provider_key_source:-}" \
@@ -60,6 +67,7 @@ if ! jq empty audit-report.json >/dev/null 2>&1; then
       pr_number: (if $pr_number == "" then null else ($pr_number | tonumber?) end),
       base_sha: $base_sha,
       head_sha: $head_sha,
+      audit_mode: $audit_mode,
       provider: $provider,
       provider_key_source: (if $provider_key_source == "" then null else $provider_key_source end),
       responses_api_endpoint: (if $responses_api_endpoint == "" then null else $responses_api_endpoint end),

@@ -5,6 +5,7 @@ workdir="${INPUT_WORKING_DIRECTORY:-.}"
 preflight_dir="${PREFLIGHT_DIR:-.codex-smart-contract-auditor/preflight}"
 runtime_context_path="${RUNTIME_CONTEXT_PATH:-.codex-smart-contract-auditor/runtime-context.md}"
 has_foundry="${HAS_FOUNDRY:-false}"
+audit_mode="${INPUT_AUDIT_MODE:-pr}"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -86,25 +87,42 @@ head_sha="${INPUT_HEAD_SHA:-}"
 pr_number="${INPUT_PR_NUMBER:-}"
 severity_threshold="${INPUT_SEVERITY_THRESHOLD:-medium}"
 
-if [[ -z "$base_sha" && -n "${GITHUB_EVENT_PATH:-}" && -f "$GITHUB_EVENT_PATH" ]]; then
-  base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
+case "$audit_mode" in
+  pr|snapshot)
+    ;;
+  *)
+    printf 'unsupported audit mode: %s\n' "$audit_mode" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$audit_mode" == "pr" ]]; then
+  if [[ -z "$base_sha" && -n "${GITHUB_EVENT_PATH:-}" && -f "$GITHUB_EVENT_PATH" ]]; then
+    base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
+  fi
+  if [[ -z "$head_sha" && -n "${GITHUB_EVENT_PATH:-}" && -f "$GITHUB_EVENT_PATH" ]]; then
+    head_sha="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+  fi
+  if [[ -z "$pr_number" && -n "${GITHUB_EVENT_PATH:-}" && -f "$GITHUB_EVENT_PATH" ]]; then
+    pr_number="$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")"
+  fi
 fi
-if [[ -z "$head_sha" && -n "${GITHUB_EVENT_PATH:-}" && -f "$GITHUB_EVENT_PATH" ]]; then
-  head_sha="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
-fi
-if [[ -z "$pr_number" && -n "${GITHUB_EVENT_PATH:-}" && -f "$GITHUB_EVENT_PATH" ]]; then
-  pr_number="$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")"
-fi
+
 if [[ -z "$head_sha" ]]; then
   head_sha="$(git rev-parse HEAD)"
 fi
 
-if [[ -n "$base_sha" ]]; then
+if [[ "$audit_mode" == "snapshot" ]]; then
+  base_sha=""
+  pr_number=""
+  git ls-files > "$changed_files"
+  printf 'Snapshot mode: auditing full checked-out branch state at %s.\n' "$head_sha" > "$preflight_dir/diff-stat.txt"
+elif [[ -n "$base_sha" ]]; then
   git diff --name-only "$base_sha" "$head_sha" > "$changed_files" || true
   git diff --stat "$base_sha" "$head_sha" > "$preflight_dir/diff-stat.txt" || true
 else
   git ls-files > "$changed_files"
-  printf 'Base SHA unavailable; using repository file list as fallback.\n' > "$preflight_dir/diff-stat.txt"
+  printf 'PR mode without a usable base SHA: using repository file list as fallback.\n' > "$preflight_dir/diff-stat.txt"
 fi
 
 grep -E '\.(sol|vy)$' "$changed_files" > "$solidity_changes" || true
@@ -136,11 +154,16 @@ fi
 {
   echo "# Runtime Audit Context"
   echo
+  echo "- Audit mode: $audit_mode"
   echo "- Working directory: $workdir"
   echo "- Severity threshold: $severity_threshold"
   echo "- Base SHA: ${base_sha:-unavailable}"
   echo "- Head SHA: ${head_sha:-unavailable}"
-  echo "- Pull request number: ${pr_number:-unavailable}"
+  if [[ "$audit_mode" == "snapshot" ]]; then
+    echo "- Pull request number: not applicable"
+  else
+    echo "- Pull request number: ${pr_number:-unavailable}"
+  fi
   echo
   echo "## Repository layout"
   find . -maxdepth 2 \
@@ -193,6 +216,7 @@ fi
 {
   echo "# Deterministic Preflight Summary"
   echo
+  printf -- "- Audit mode: %s\n" "$audit_mode"
   printf -- "- Changed files: %s\n" "$(safe_line_count "$changed_files")"
   printf -- "- Solidity/Vyper changes: %s\n" "$(safe_line_count "$solidity_changes")"
   printf -- "- Contracts discovered: %s\n" "$(safe_line_count "$contract_files")"
@@ -225,3 +249,4 @@ fi
 write_output "base_sha" "$base_sha"
 write_output "head_sha" "$head_sha"
 write_output "pr_number" "$pr_number"
+write_output "audit_mode" "$audit_mode"
