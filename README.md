@@ -368,7 +368,7 @@ Safe defaults included here:
 Additional rigor-oriented setup:
 
 - installs `graphviz` so Trail of Bits visual outputs are less likely to block
-- installs Foundry on the runner when a `foundry.toml` repo is detected and `forge` is missing
+- installs Foundry with the official `foundry-rs/foundry-toolchain` action when a `foundry.toml` repo is detected
 - runs best-effort preflight Slither summaries before the model starts
 
 Also important:

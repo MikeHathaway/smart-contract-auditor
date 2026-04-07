@@ -165,38 +165,9 @@ jobs:
 
       - name: Install Foundry when a Foundry repo is detected
         if: ${{ steps.toolchain_layout.outputs.foundry == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v forge >/dev/null 2>&1; then
-            exit 0
-          fi
-          curl -fsSL https://foundry.paradigm.xyz -o /tmp/foundry-bootstrap.sh
-          bash /tmp/foundry-bootstrap.sh
-          export PATH="$HOME/.foundry/bin:$PATH"
-          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
-
-          # The official installer updates shell startup files and expects a new
-          # shell session before `foundryup` is available. In CI, try the
-          # direct bin path first, then source common profile files as a
-          # best-effort fallback.
-          if ! command -v foundryup >/dev/null 2>&1; then
-            set +u
-            for profile in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile"; do
-              if [[ -f "$profile" ]]; then
-                # shellcheck disable=SC1090
-                . "$profile" >/dev/null 2>&1 || true
-              fi
-            done
-            set -u
-          fi
-
-          if ! command -v foundryup >/dev/null 2>&1; then
-            echo "Foundry bootstrap completed but 'foundryup' is still unavailable." >&2
-            exit 1
-          fi
-
-          foundryup
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
 
       - name: Install external skill packs
         shell: bash
