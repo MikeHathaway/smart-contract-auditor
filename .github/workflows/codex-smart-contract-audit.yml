@@ -445,6 +445,7 @@ jobs:
           BLOCKED_CHECKS: ${{ needs.audit.outputs.blocked_checks }}
           ARTIFACT_NAME: ${{ needs.audit.outputs.artifact_name }}
           AUDIT_REPORT_JSON_PATH: audit-report.json
+          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           github-token: ${{ github.token }}
           script: |
