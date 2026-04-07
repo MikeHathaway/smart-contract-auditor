@@ -94,9 +94,31 @@ If you are consuming this repository directly, keep the `uses:` target pointed a
 - `OPENAI_API_KEY` for OpenAI-hosted Responses
 - `VENICE_API_KEY` for Venice-hosted Responses
 
+Store these as **GitHub Actions repository secrets** by default:
+
+- repository: `Settings` -> `Secrets and variables` -> `Actions` -> `Repository secrets`
+
+That is the intended default for this workflow. It does not require GitHub Actions environments.
+
 Both secrets are optional so the workflow can degrade cleanly for environments like forked PRs. If the selected provider key is not available, it still emits deterministic artifacts with a `Blocked Checks` section instead of failing silently.
 
 If `provider: venice` is selected and `VENICE_API_KEY` is not set, the workflow falls back to `OPENAI_API_KEY` as a compatibility escape hatch. That is useful if you already store a Venice key under the older secret name, but `VENICE_API_KEY` is the cleaner long-term setup.
+
+Use an organization secret if you want to share one provider key across multiple repositories. Use an environment secret only if you intentionally want environment-level approvals or scoping and are also wiring `environment:` into the caller workflow.
+
+## Quick Setup Guide
+
+For a typical Venice-backed setup:
+
+1. In the repository you want to audit, go to `Settings` -> `Secrets and variables` -> `Actions`.
+2. Under `Repository secrets`, create `VENICE_API_KEY`.
+3. Add a workflow that calls:
+   `MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main`
+4. Set `provider: venice`.
+5. Leave `model: ""` and `effort: ""` if you want the workflow’s Venice defaults.
+6. Pass the secret with:
+   `VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}`
+7. Open or update a pull request to trigger the audit.
 
 ## Required Permissions
 
