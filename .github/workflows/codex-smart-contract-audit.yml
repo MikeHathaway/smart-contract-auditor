@@ -3,16 +3,26 @@ name: Codex Smart Contract Audit
 on:
   workflow_call:
     inputs:
+      provider:
+        description: AI provider selection. Use `auto`, `openai`, or `venice`.
+        required: false
+        type: string
+        default: auto
       model:
-        description: Codex model override. Leave empty for the action default.
+        description: Optional model override. Leave empty to use provider defaults.
         required: false
         type: string
         default: ""
       effort:
-        description: Codex reasoning effort.
+        description: Optional reasoning effort override. Leave empty to use provider defaults.
         required: false
         type: string
-        default: high
+        default: ""
+      responses-api-endpoint:
+        description: Optional Responses API endpoint override. Venice defaults to https://api.venice.ai/api/v1/responses.
+        required: false
+        type: string
+        default: ""
       working-directory:
         description: Repository subdirectory to prioritize during audit.
         required: false
@@ -56,6 +66,8 @@ on:
     secrets:
       OPENAI_API_KEY:
         required: false
+      VENICE_API_KEY:
+        required: false
 
 concurrency:
   group: codex-smart-contract-audit-${{ github.repository }}-${{ inputs.pr-number || github.run_id }}-${{ inputs.working-directory }}
@@ -68,6 +80,7 @@ jobs:
     timeout-minutes: 60
     env:
       OPENAI_API_KEY_VALUE: ${{ secrets.OPENAI_API_KEY }}
+      VENICE_API_KEY_VALUE: ${{ secrets.VENICE_API_KEY }}
     permissions:
       contents: read
     outputs:
@@ -397,31 +410,138 @@ jobs:
             cat .codex-smart-contract-auditor/runtime-context.md
           } >> .codex-smart-contract-auditor/prompt.md
 
-      - name: Run Codex sequential audit
-        id: run_codex
-        if: ${{ env.OPENAI_API_KEY_VALUE != '' }}
+      - name: Resolve provider configuration
+        id: provider_config
+        shell: bash
+        env:
+          INPUT_PROVIDER: ${{ inputs.provider }}
+          INPUT_MODEL: ${{ inputs.model }}
+          INPUT_EFFORT: ${{ inputs.effort }}
+          INPUT_RESPONSES_API_ENDPOINT: ${{ inputs.responses-api-endpoint }}
+        run: |
+          set -euo pipefail
+
+          provider="$(printf '%s' "$INPUT_PROVIDER" | tr '[:upper:]' '[:lower:]')"
+          endpoint="$INPUT_RESPONSES_API_ENDPOINT"
+          model="$INPUT_MODEL"
+          effort="$INPUT_EFFORT"
+          key_source=""
+
+          case "$provider" in
+            ""|auto)
+              provider="auto"
+              ;;
+            openai|venice)
+              ;;
+            *)
+              echo "Unsupported provider value: $provider" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "$provider" == "auto" ]]; then
+            if [[ -n "$endpoint" ]] && [[ "$endpoint" == *"venice.ai"* ]]; then
+              provider="venice"
+            elif [[ -n "$VENICE_API_KEY_VALUE" ]] && [[ -z "$OPENAI_API_KEY_VALUE" ]]; then
+              provider="venice"
+            elif [[ -n "$OPENAI_API_KEY_VALUE" ]]; then
+              provider="openai"
+            elif [[ -n "$VENICE_API_KEY_VALUE" ]]; then
+              provider="venice"
+            else
+              provider="openai"
+            fi
+          fi
+
+          case "$provider" in
+            openai)
+              [[ -n "$OPENAI_API_KEY_VALUE" ]] && key_source="openai"
+              ;;
+            venice)
+              endpoint="${endpoint:-https://api.venice.ai/api/v1/responses}"
+              model="${model:-openai-gpt-54}"
+              effort="${effort:-high}"
+              if [[ -n "$VENICE_API_KEY_VALUE" ]]; then
+                key_source="venice"
+              elif [[ -n "$OPENAI_API_KEY_VALUE" ]]; then
+                key_source="openai-fallback"
+              fi
+              ;;
+          esac
+
+          if [[ -n "$key_source" ]]; then
+            echo "api_key_present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "api_key_present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          echo "responses_api_endpoint=$endpoint" >> "$GITHUB_OUTPUT"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          echo "effort=$effort" >> "$GITHUB_OUTPUT"
+          echo "key_source=$key_source" >> "$GITHUB_OUTPUT"
+
+      - name: Run Codex sequential audit with OpenAI
+        id: run_codex_openai
+        if: ${{ steps.provider_config.outputs.provider == 'openai' && steps.provider_config.outputs.api_key_present == 'true' }}
         continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ env.OPENAI_API_KEY_VALUE }}
+          responses-api-endpoint: ${{ steps.provider_config.outputs.responses_api_endpoint }}
           prompt-file: .codex-smart-contract-auditor/prompt.md
           output-file: .codex-smart-contract-auditor/final-message.md
           safety-strategy: drop-sudo
           sandbox: workspace-write
           codex-args: '["--full-auto"]'
-          model: ${{ inputs.model }}
-          effort: ${{ inputs.effort }}
+          model: ${{ steps.provider_config.outputs.model }}
+          effort: ${{ steps.provider_config.outputs.effort }}
+
+      - name: Run Codex sequential audit with Venice
+        id: run_codex_venice
+        if: ${{ steps.provider_config.outputs.provider == 'venice' && steps.provider_config.outputs.key_source == 'venice' }}
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ env.VENICE_API_KEY_VALUE }}
+          responses-api-endpoint: ${{ steps.provider_config.outputs.responses_api_endpoint }}
+          prompt-file: .codex-smart-contract-auditor/prompt.md
+          output-file: .codex-smart-contract-auditor/final-message.md
+          safety-strategy: drop-sudo
+          sandbox: workspace-write
+          codex-args: '["--full-auto"]'
+          model: ${{ steps.provider_config.outputs.model }}
+          effort: ${{ steps.provider_config.outputs.effort }}
+
+      - name: Run Codex sequential audit with Venice key from OPENAI_API_KEY
+        id: run_codex_venice_fallback
+        if: ${{ steps.provider_config.outputs.provider == 'venice' && steps.provider_config.outputs.key_source == 'openai-fallback' }}
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ env.OPENAI_API_KEY_VALUE }}
+          responses-api-endpoint: ${{ steps.provider_config.outputs.responses_api_endpoint }}
+          prompt-file: .codex-smart-contract-auditor/prompt.md
+          output-file: .codex-smart-contract-auditor/final-message.md
+          safety-strategy: drop-sudo
+          sandbox: workspace-write
+          codex-args: '["--full-auto"]'
+          model: ${{ steps.provider_config.outputs.model }}
+          effort: ${{ steps.provider_config.outputs.effort }}
 
       - name: Validate or synthesize audit outputs
         id: validate_outputs
         shell: bash
         env:
-          OPENAI_KEY_PRESENT: ${{ env.OPENAI_API_KEY_VALUE != '' }}
-          CODEX_OUTCOME: ${{ steps.run_codex.outcome }}
+          API_KEY_PRESENT: ${{ steps.provider_config.outputs.api_key_present }}
+          PROVIDER: ${{ steps.provider_config.outputs.provider }}
+          PROVIDER_KEY_SOURCE: ${{ steps.provider_config.outputs.key_source }}
+          RESPONSES_API_ENDPOINT: ${{ steps.provider_config.outputs.responses_api_endpoint }}
+          CODEX_OUTCOME: ${{ steps.run_codex_openai.outcome || steps.run_codex_venice.outcome || steps.run_codex_venice_fallback.outcome }}
           BASE_SHA: ${{ steps.context.outputs.base_sha }}
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
-          MODEL_INPUT: ${{ inputs.model }}
+          MODEL_INPUT: ${{ steps.provider_config.outputs.model }}
           SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
         run: |
           set -euo pipefail
@@ -442,17 +562,17 @@ jobs:
               printf 'No confirmed findings were emitted because the audit did not complete.\n\n'
               printf '## Blocked Checks\n\n'
               printf -- '- Codex audit execution\n'
-              printf '  - Reason: %s\n' "$(if [[ "$OPENAI_KEY_PRESENT" != "true" ]]; then echo "OPENAI_API_KEY was not provided to the reusable workflow."; else echo "Codex action finished with outcome '$CODEX_OUTCOME' or did not write the required report files."; fi)"
-              printf '  - Next step: Provide a valid API key, confirm repository prompts are valid, and re-run the workflow.\n'
+              printf '  - Reason: %s\n' "$(if [[ "$API_KEY_PRESENT" != "true" ]]; then printf 'No API key was provided for provider %s.' "$PROVIDER"; else echo "Codex action for provider '$PROVIDER' finished with outcome '$CODEX_OUTCOME' or did not write the required report files."; fi)"
+              printf '  - Next step: Provide a valid provider API key, confirm repository prompts are valid, and re-run the workflow.\n'
             } > audit-report.md
           fi
 
           if ! jq empty audit-report.json >/dev/null 2>&1; then
             blocked_reason="Codex did not write a valid audit-report.json file."
-            if [[ "$OPENAI_KEY_PRESENT" != "true" ]]; then
-              blocked_reason="OPENAI_API_KEY was not provided to the reusable workflow."
+            if [[ "$API_KEY_PRESENT" != "true" ]]; then
+              blocked_reason="No API key was provided for provider '$PROVIDER'."
             elif [[ "$CODEX_OUTCOME" == "failure" ]]; then
-              blocked_reason="Codex action failed before producing a valid JSON report."
+              blocked_reason="Codex action for provider '$PROVIDER' failed before producing a valid JSON report."
             fi
 
             jq -n \
@@ -462,6 +582,9 @@ jobs:
               --arg base_sha "${BASE_SHA:-}" \
               --arg head_sha "${HEAD_SHA:-}" \
               --arg model "${MODEL_INPUT:-}" \
+              --arg provider "${PROVIDER:-openai}" \
+              --arg provider_key_source "${PROVIDER_KEY_SOURCE:-}" \
+              --arg responses_api_endpoint "${RESPONSES_API_ENDPOINT:-}" \
               --arg severity_threshold "${SEVERITY_THRESHOLD}" \
               --arg blocked_reason "$blocked_reason" \
               '{
@@ -471,6 +594,9 @@ jobs:
                 pr_number: (if $pr_number == "" then null else ($pr_number | tonumber?) end),
                 base_sha: $base_sha,
                 head_sha: $head_sha,
+                provider: $provider,
+                provider_key_source: (if $provider_key_source == "" then null else $provider_key_source end),
+                responses_api_endpoint: (if $responses_api_endpoint == "" then null else $responses_api_endpoint end),
                 model: $model,
                 severity_threshold: $severity_threshold,
                 summary: {
@@ -509,7 +635,7 @@ jobs:
                   {
                     check: "codex-sequential-audit",
                     reason: $blocked_reason,
-                    next_step: "Provide OPENAI_API_KEY and re-run the workflow."
+                    next_step: "Provide a valid provider API key and re-run the workflow."
                   }
                 ],
                 artifacts: [

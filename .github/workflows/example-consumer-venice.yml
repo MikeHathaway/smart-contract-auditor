@@ -1,4 +1,4 @@
-name: Smart Contract Audit
+name: Smart Contract Audit (Venice)
 
 on:
   pull_request:
@@ -17,9 +17,10 @@ jobs:
   audit:
     uses: your-org/codex-smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
-      # `auto` prefers OpenAI if both OPENAI_API_KEY and VENICE_API_KEY are set.
-      # Set `provider: venice` to force Venice defaults.
-      provider: auto
+      provider: venice
+      # Leave model/effort blank to use the workflow's Venice defaults:
+      # - model: openai-gpt-54
+      # - effort: high
       model: ""
       effort: ""
       working-directory: .
@@ -30,5 +31,4 @@ jobs:
       base-sha: ${{ github.event.pull_request.base.sha }}
       head-sha: ${{ github.event.pull_request.head.sha }}
     secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}

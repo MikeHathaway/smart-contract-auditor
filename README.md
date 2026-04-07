@@ -9,6 +9,8 @@ It wires together two required audit skill families:
 
 The goal is simple: let an EVM repository drop in **one workflow file** and get a merged audit report in both Markdown and JSON, plus an optional sticky PR summary comment.
 
+The reusable workflow supports both OpenAI-hosted Responses and Venice-hosted Responses.
+
 ## What This Repo Does
 
 The reusable workflow:
@@ -66,7 +68,9 @@ jobs:
   audit:
     uses: your-org/codex-smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
-      effort: high
+      provider: auto
+      model: ""
+      effort: ""
       severity-threshold: medium
       fail-on-severity: high
       post-pr-comment: true
@@ -75,15 +79,22 @@ jobs:
       head-sha: ${{ github.event.pull_request.head.sha }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
 ```
 
-There is also a ready-to-copy example in [`.github/workflows/example-consumer.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer.yml).
+Ready-to-copy consumer workflows:
 
-## Required Secret
+- generic provider-aware example: [`.github/workflows/example-consumer.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer.yml)
+- Venice-only example: [`.github/workflows/example-consumer-venice.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-venice.yml)
 
-- `OPENAI_API_KEY`
+## Provider Secrets
 
-The reusable workflow treats this secret as optional so it can degrade cleanly for environments like forked PRs. If the key is not available, it still emits deterministic artifacts with a `Blocked Checks` section instead of failing silently.
+- `OPENAI_API_KEY` for OpenAI-hosted Responses
+- `VENICE_API_KEY` for Venice-hosted Responses
+
+Both secrets are optional so the workflow can degrade cleanly for environments like forked PRs. If the selected provider key is not available, it still emits deterministic artifacts with a `Blocked Checks` section instead of failing silently.
+
+If `provider: venice` is selected and `VENICE_API_KEY` is not set, the workflow falls back to `OPENAI_API_KEY` as a compatibility escape hatch. That is useful if you already store a Venice key under the older secret name, but `VENICE_API_KEY` is the cleaner long-term setup.
 
 ## Required Permissions
 
@@ -99,8 +110,10 @@ The audit job itself uses only `contents: read`. PR write access is isolated to 
 
 The reusable workflow supports these inputs:
 
+- `provider`: `auto`, `openai`, or `venice`; defaults to `auto`
 - `model`: optional Codex model override
-- `effort`: Codex reasoning effort, defaults to `high`
+- `effort`: optional Codex reasoning effort override
+- `responses-api-endpoint`: optional Responses API endpoint override
 - `working-directory`: repository subdirectory to prioritize
 - `severity-threshold`: summary emphasis threshold, defaults to `medium`
 - `fail-on-severity`: fail the workflow when findings at or above this severity exist
@@ -109,6 +122,44 @@ The reusable workflow supports these inputs:
 - `base-sha`: optional explicit base SHA
 - `head-sha`: optional explicit head SHA
 - `pr-number`: optional explicit pull request number
+
+Provider defaults are intentionally asymmetric:
+
+- `provider: auto` prefers OpenAI when both `OPENAI_API_KEY` and `VENICE_API_KEY` are present
+- OpenAI: if `model` and `effort` are blank, the action uses Codex defaults
+- Venice: if `model` is blank, the workflow uses `openai-gpt-54`
+- Venice: if `effort` is blank, the workflow uses `high`
+- Venice: if `responses-api-endpoint` is blank, the workflow uses `https://api.venice.ai/api/v1/responses`
+
+That keeps OpenAI behavior cleaner while making Venice deterministic enough to work reliably with `openai/codex-action`.
+
+## Venice Setup
+
+To force Venice as the backing Responses provider:
+
+```yaml
+jobs:
+  audit:
+    uses: your-org/codex-smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
+    with:
+      provider: venice
+      model: ""
+      effort: ""
+    secrets:
+      VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
+```
+
+With those settings, the workflow resolves these Venice defaults automatically:
+
+- endpoint: `https://api.venice.ai/api/v1/responses`
+- model: `openai-gpt-54`
+- effort: `high`
+
+If you need a different Venice model or endpoint, pass `model` or `responses-api-endpoint` explicitly.
+
+If both provider secrets are configured and you still want Venice, set `provider: venice` explicitly.
+
+There is also a dedicated copy-paste Venice consumer workflow in [`.github/workflows/example-consumer-venice.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-venice.yml).
 
 ## Evidence Artifacts
 
@@ -265,7 +316,7 @@ Additional rigor-oriented setup:
 Also important:
 
 - do not feed raw untrusted PR descriptions or issue bodies into the prompt without sanitizing them
-- keep `OPENAI_API_KEY` scoped to the reusable workflow invocation
+- keep provider API keys scoped to the reusable workflow invocation
 - remember that blocked checks are expected in some repos, especially when Slither or deeper static analysis cannot run cleanly without additional project setup
 
 ## Limitations
@@ -274,6 +325,7 @@ Also important:
 - It avoids undocumented `openai/codex-action@v1` inputs on purpose.
 - Smart contract repos vary wildly. Some checks will still block on compiler or dependency layout. When that happens, the workflow reports the block instead of pretending the check ran.
 - For forked PRs, GitHub often withholds secrets. In that case you still get artifacts, but the report will show Codex execution as blocked.
+- Venice support depends on Venice continuing to accept Codex-compatible Responses API payloads. The workflow now targets Venice’s `/api/v1/responses` endpoint directly, but provider-specific payload differences can still affect behavior.
 
 ## Compatibility
 
