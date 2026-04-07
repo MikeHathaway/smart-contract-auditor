@@ -157,6 +157,16 @@ Provider defaults are intentionally asymmetric:
 
 That keeps OpenAI behavior cleaner while making Venice deterministic enough to work reliably with `openai/codex-action`.
 
+## Workflow Internals
+
+The reusable workflow still exposes one public entrypoint, but the largest implementation sections now live in repo-local helper scripts for maintainability:
+
+- `scripts/run-preflight.sh`
+- `scripts/validate-audit-outputs.sh`
+- `scripts/upsert-pr-comment.cjs`
+
+That keeps provider selection, preflight logic, fallback artifact generation, and sticky-comment behavior easier to review and change without growing the workflow YAML further.
+
 ## Venice Setup
 
 To force Venice as the backing Responses provider:

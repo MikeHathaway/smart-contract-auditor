@@ -84,6 +84,8 @@ jobs:
     permissions:
       contents: read
     outputs:
+      workflow_repository: ${{ steps.workflow_source.outputs.repository }}
+      workflow_ref: ${{ steps.workflow_source.outputs.ref }}
       pr_number: ${{ steps.summarize.outputs.pr_number }}
       overall_status: ${{ steps.summarize.outputs.overall_status }}
       critical: ${{ steps.summarize.outputs.critical }}
@@ -167,157 +169,6 @@ jobs:
           "$HOME/.foundry/bin/foundryup"
           echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
 
-      - name: Resolve audit context
-        id: context
-        shell: bash
-        env:
-          INPUT_BASE_SHA: ${{ inputs.base-sha }}
-          INPUT_HEAD_SHA: ${{ inputs.head-sha }}
-          INPUT_PR_NUMBER: ${{ inputs.pr-number }}
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
-          INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
-        run: |
-          set -euo pipefail
-
-          base_sha="$INPUT_BASE_SHA"
-          head_sha="$INPUT_HEAD_SHA"
-          pr_number="$INPUT_PR_NUMBER"
-          preflight_dir=".codex-smart-contract-auditor/preflight"
-
-          if [[ -z "$base_sha" ]]; then
-            base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
-          fi
-          if [[ -z "$head_sha" ]]; then
-            head_sha="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
-          fi
-          if [[ -z "$pr_number" ]]; then
-            pr_number="$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")"
-          fi
-          if [[ -z "$head_sha" ]]; then
-            head_sha="$(git rev-parse HEAD)"
-          fi
-
-          changed_files="$preflight_dir/changed-files.txt"
-          if [[ -n "$base_sha" ]]; then
-            git diff --name-only "$base_sha" "$head_sha" > "$changed_files" || true
-            git diff --stat "$base_sha" "$head_sha" > "$preflight_dir/diff-stat.txt" || true
-          else
-            git ls-files > "$changed_files"
-            printf 'Base SHA unavailable; using repository file list as fallback.\n' > "$preflight_dir/diff-stat.txt"
-          fi
-
-          solidity_changes="$preflight_dir/solidity-changes.txt"
-          grep -E '\.(sol|vy)$' "$changed_files" > "$solidity_changes" || true
-
-          contract_files="$preflight_dir/contract-files.txt"
-          test_files="$preflight_dir/test-files.txt"
-          script_files="$preflight_dir/script-files.txt"
-          entry_points="$preflight_dir/public-entry-points.txt"
-          privileged_entry_points="$preflight_dir/privileged-entry-points.txt"
-          token_surface="$preflight_dir/token-surface.txt"
-          upgrade_surface="$preflight_dir/upgrade-surface.txt"
-          access_control_surface="$preflight_dir/access-control-surface.txt"
-          blast_radius="$preflight_dir/blast-radius-seeds.txt"
-
-          find "$INPUT_WORKING_DIRECTORY" -type f \( -name '*.sol' -o -name '*.vy' \) | sort > "$contract_files" || true
-          find "$INPUT_WORKING_DIRECTORY" -type f \
-            \( -path '*/test/*' -o -path '*/tests/*' -o -name '*.t.sol' -o -name '*Test.sol' -o -name '*.spec.ts' -o -name '*.test.ts' -o -name '*.spec.js' -o -name '*.test.js' \) \
-            | sort > "$test_files" || true
-          find "$INPUT_WORKING_DIRECTORY" -type f \
-            \( -path '*/script/*' -o -path '*/scripts/*' -o -name '*Deploy*.s.sol' -o -name '*deploy*.ts' -o -name '*deploy*.js' \) \
-            | sort > "$script_files" || true
-
-          rg --no-heading --line-number 'function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*(public|external)' "$INPUT_WORKING_DIRECTORY" > "$entry_points" || true
-          rg --no-heading --line-number 'function\s+[A-Za-z0-9_]+\s*\([^)]*\)[^{;]*\b(onlyOwner|onlyRole|auth|requiresAuth|governor|admin)\b' "$INPUT_WORKING_DIRECTORY" > "$privileged_entry_points" || true
-          rg --no-heading --line-number 'IERC20|IERC721|IERC1155|ERC20|ERC721|ERC1155|transferFrom|safeTransferFrom|approve\(|permit\(' "$INPUT_WORKING_DIRECTORY" > "$token_surface" || true
-          rg --no-heading --line-number 'UUPSUpgradeable|TransparentUpgradeableProxy|ERC1967|ProxyAdmin|upgradeTo|upgradeToAndCall|initializer|reinitializer' "$INPUT_WORKING_DIRECTORY" > "$upgrade_surface" || true
-          rg --no-heading --line-number 'onlyOwner|onlyRole|AccessControl|Ownable|auth|governor|timelock|multisig|pause\(|unpause\(' "$INPUT_WORKING_DIRECTORY" > "$access_control_surface" || true
-
-          : > "$blast_radius"
-          if [[ -s "$solidity_changes" ]]; then
-            while IFS= read -r file; do
-              [[ -f "$file" ]] || continue
-              printf '%s\n' "$file" >> "$blast_radius"
-              rg --no-heading --line-number '^\s*import\s+' "$file" >> "$blast_radius" || true
-              rg --no-heading --line-number 'contract\s+.+\s+is\s+' "$file" >> "$blast_radius" || true
-            done < "$solidity_changes"
-          fi
-
-          {
-            echo "# Runtime Audit Context"
-            echo
-            echo "- Working directory: $INPUT_WORKING_DIRECTORY"
-            echo "- Severity threshold: $INPUT_SEVERITY_THRESHOLD"
-            echo "- Base SHA: ${base_sha:-unavailable}"
-            echo "- Head SHA: ${head_sha:-unavailable}"
-            echo "- Pull request number: ${pr_number:-unavailable}"
-            echo
-            echo "## Repository layout"
-            find . -maxdepth 2 \
-              \( -name 'foundry.toml' -o -name 'hardhat.config.*' -o -name 'package.json' -o -name 'pyproject.toml' -o -name 'remappings.txt' \) \
-              -print | sort || true
-            echo
-            echo "## Tool availability"
-            printf -- "- slither: %s\n" "$(command -v slither >/dev/null 2>&1 && slither --version 2>/dev/null | head -1 || echo unavailable)"
-            printf -- "- solc-select: %s\n" "$(command -v solc-select >/dev/null 2>&1 && solc-select --version 2>/dev/null | head -1 || echo unavailable)"
-            printf -- "- forge: %s\n" "$(command -v forge >/dev/null 2>&1 && forge --version 2>/dev/null | head -1 || echo unavailable)"
-            printf -- "- node: %s\n" "$(command -v node >/dev/null 2>&1 && node --version 2>/dev/null || echo unavailable)"
-            echo
-            echo "## Diff stat"
-            cat "$preflight_dir/diff-stat.txt"
-            echo
-            echo "## Changed files"
-            sed 's/^/- /' "$changed_files" || true
-            echo
-            echo "## Contract inventory"
-            sed 's/^/- /' "$contract_files" || true
-            echo
-            echo "## Test inventory"
-            sed 's/^/- /' "$test_files" || true
-            echo
-            echo "## Script inventory"
-            sed 's/^/- /' "$script_files" || true
-            echo
-            echo "## Solidity / Vyper changes"
-            sed 's/^/- /' "$solidity_changes" || true
-            echo
-            echo "## Blast radius seeds"
-            sed 's/^/- /' "$blast_radius" || true
-            echo
-            echo "## Public / external entry points"
-            cat "$entry_points" || true
-            echo
-            echo "## Privileged entry points"
-            cat "$privileged_entry_points" || true
-            echo
-            echo "## Token surface"
-            cat "$token_surface" || true
-            echo
-            echo "## Upgrade surface"
-            cat "$upgrade_surface" || true
-            echo
-            echo "## Access control surface"
-            cat "$access_control_surface" || true
-          } > .codex-smart-contract-auditor/runtime-context.md
-
-          {
-            echo "# Deterministic Preflight Summary"
-            echo
-            printf -- "- Changed files: %s\n" "$(wc -l < "$changed_files" | tr -d ' ')"
-            printf -- "- Solidity/Vyper changes: %s\n" "$(wc -l < "$solidity_changes" | tr -d ' ')"
-            printf -- "- Contracts discovered: %s\n" "$(wc -l < "$contract_files" | tr -d ' ')"
-            printf -- "- Tests discovered: %s\n" "$(wc -l < "$test_files" | tr -d ' ')"
-            printf -- "- Scripts discovered: %s\n" "$(wc -l < "$script_files" | tr -d ' ')"
-            printf -- "- Public/external entry points: %s\n" "$(wc -l < "$entry_points" | tr -d ' ')"
-            printf -- "- Privileged entry points: %s\n" "$(wc -l < "$privileged_entry_points" | tr -d ' ')"
-            printf -- "- Token surface hits: %s\n" "$(wc -l < "$token_surface" | tr -d ' ')"
-            printf -- "- Upgrade surface hits: %s\n" "$(wc -l < "$upgrade_surface" | tr -d ' ')"
-          } > "$preflight_dir/summary.md"
-
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
-          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-
       - name: Install external skill packs
         shell: bash
         run: |
@@ -328,57 +179,19 @@ jobs:
           STATE_DIR="$GITHUB_WORKSPACE/.codex-smart-contract-auditor" \
           ./.codex-smart-contract-auditor-src/install-skills.sh
 
-      - name: Run deterministic preflight scans
+      - name: Run deterministic preflight
+        id: context
         shell: bash
         env:
+          INPUT_BASE_SHA: ${{ inputs.base-sha }}
+          INPUT_HEAD_SHA: ${{ inputs.head-sha }}
+          INPUT_PR_NUMBER: ${{ inputs.pr-number }}
           INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
           HAS_FOUNDRY: ${{ steps.toolchain_layout.outputs.foundry }}
         run: |
           set -euo pipefail
-          preflight_dir=".codex-smart-contract-auditor/preflight"
-          blockers="$preflight_dir/tool-blockers.md"
-          checks="$preflight_dir/preflight-checks.md"
-          contract_files="$preflight_dir/contract-files.txt"
-
-          : > "$blockers"
-          : > "$checks"
-
-          run_preflight_scan() {
-            local label="$1"
-            shift
-            local out="$preflight_dir/${label}.txt"
-            local err="$preflight_dir/${label}.stderr"
-            if timeout 600s "$@" >"$out" 2>"$err"; then
-              printf -- "- %s: ok\n" "$label" >> "$checks"
-            else
-              printf -- "- %s: blocked\n" "$label" >> "$checks"
-              {
-                printf '## %s\n' "$label"
-                if [[ -s "$err" ]]; then
-                  head -40 "$err"
-                else
-                  printf 'Command exited without stderr output.\n'
-                fi
-                printf '\n'
-              } >> "$blockers"
-              rm -f "$out"
-            fi
-          }
-
-          if [[ -s "$contract_files" ]]; then
-            run_preflight_scan "slither-human-summary" slither "$INPUT_WORKING_DIRECTORY" --exclude-dependencies --print human-summary
-            run_preflight_scan "slither-contract-summary" slither "$INPUT_WORKING_DIRECTORY" --exclude-dependencies --print contract-summary
-            run_preflight_scan "slither-function-summary" slither "$INPUT_WORKING_DIRECTORY" --exclude-dependencies --print function-summary
-            run_preflight_scan "slither-vars-and-auth" slither "$INPUT_WORKING_DIRECTORY" --exclude-dependencies --print vars-and-auth
-          else
-            printf '## slither-preflight\nNo Solidity or Vyper contracts detected under %s.\n' "$INPUT_WORKING_DIRECTORY" >> "$blockers"
-          fi
-
-          if [[ "$HAS_FOUNDRY" == "true" ]] && command -v forge >/dev/null 2>&1; then
-            run_preflight_scan "forge-test-list" forge test --root "$INPUT_WORKING_DIRECTORY" --list
-          else
-            printf '## forge-test-list\nFoundry not detected or forge is unavailable.\n' >> "$blockers"
-          fi
+          bash ./.codex-smart-contract-auditor-src/scripts/run-preflight.sh
 
       - name: Generate runtime prompt
         shell: bash
@@ -513,121 +326,7 @@ jobs:
           SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
         run: |
           set -euo pipefail
-
-          if [[ ! -f audit-report.md ]]; then
-            {
-              printf '# Smart Contract Audit Report\n\n'
-              printf '## Executive Summary\n\n'
-              printf 'The reusable workflow did not receive a complete audit report from Codex. A fallback report was generated so the workflow still emits deterministic artifacts.\n\n'
-              printf '## Scope\n\n'
-              printf -- '- Base SHA: %s\n' "${BASE_SHA:-unavailable}"
-              printf -- '- Head SHA: %s\n' "${HEAD_SHA:-unavailable}"
-              printf -- '- Pull request number: %s\n\n' "${PR_NUMBER:-unavailable}"
-              printf '## Skills / Checks Run\n\n'
-              printf -- '- secure-workflow-guide: blocked\n'
-              printf -- '- smart-contract-audit: blocked\n\n'
-              printf '## Findings Table\n\n'
-              printf 'No confirmed findings were emitted because the audit did not complete.\n\n'
-              printf '## Blocked Checks\n\n'
-              printf -- '- Codex audit execution\n'
-              printf '  - Reason: %s\n' "$(if [[ "$API_KEY_PRESENT" != "true" ]]; then printf 'No API key was provided for provider %s.' "$PROVIDER"; else echo "Codex action for provider '$PROVIDER' finished with outcome '$CODEX_OUTCOME' or did not write the required report files."; fi)"
-              printf '  - Next step: Provide a valid provider API key, confirm repository prompts are valid, and re-run the workflow.\n'
-            } > audit-report.md
-          fi
-
-          if ! jq empty audit-report.json >/dev/null 2>&1; then
-            blocked_reason="Codex did not write a valid audit-report.json file."
-            if [[ "$API_KEY_PRESENT" != "true" ]]; then
-              blocked_reason="No API key was provided for provider '$PROVIDER'."
-            elif [[ "$CODEX_OUTCOME" == "failure" ]]; then
-              blocked_reason="Codex action for provider '$PROVIDER' failed before producing a valid JSON report."
-            fi
-
-            jq -n \
-              --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              --arg repository "${GITHUB_REPOSITORY}" \
-              --arg pr_number "${PR_NUMBER:-}" \
-              --arg base_sha "${BASE_SHA:-}" \
-              --arg head_sha "${HEAD_SHA:-}" \
-              --arg model "${MODEL_INPUT:-}" \
-              --arg provider "${PROVIDER:-openai}" \
-              --arg provider_key_source "${PROVIDER_KEY_SOURCE:-}" \
-              --arg responses_api_endpoint "${RESPONSES_API_ENDPOINT:-}" \
-              --arg severity_threshold "${SEVERITY_THRESHOLD}" \
-              --arg blocked_reason "$blocked_reason" \
-              '{
-                schema_version: "1.0",
-                generated_at: $generated_at,
-                repository: $repository,
-                pr_number: (if $pr_number == "" then null else ($pr_number | tonumber?) end),
-                base_sha: $base_sha,
-                head_sha: $head_sha,
-                provider: $provider,
-                provider_key_source: (if $provider_key_source == "" then null else $provider_key_source end),
-                responses_api_endpoint: (if $responses_api_endpoint == "" then null else $responses_api_endpoint end),
-                model: $model,
-                severity_threshold: $severity_threshold,
-                summary: {
-                  critical: 0,
-                  high: 0,
-                  medium: 0,
-                  low: 0,
-                  informational: 0,
-                  blocked_checks: 1
-                },
-                scope: {
-                  changed_files: [],
-                  blast_radius_files: [],
-                  contracts_reviewed: [],
-                  tests_reviewed: []
-                },
-                checks_run: [
-                  {
-                    name: "secure-workflow-guide",
-                    source: "trail-of-bits",
-                    status: "blocked",
-                    notes: $blocked_reason,
-                    artifact_paths: [".codex-smart-contract-auditor/preflight"]
-                  },
-                  {
-                    name: "smart-contract-audit",
-                    source: "forefy",
-                    status: "blocked",
-                    notes: $blocked_reason,
-                    artifact_paths: [".context/outputs"]
-                  }
-                ],
-                findings: [],
-                security_properties: [],
-                blocked_checks: [
-                  {
-                    check: "codex-sequential-audit",
-                    reason: $blocked_reason,
-                    next_step: "Provide a valid provider API key and re-run the workflow."
-                  }
-                ],
-                artifacts: [
-                  {
-                    path: ".codex-smart-contract-auditor/preflight",
-                    kind: "preflight"
-                  },
-                  {
-                    path: ".context/outputs",
-                    kind: "forefy-output"
-                  },
-                  {
-                    path: "audit-report.md",
-                    kind: "report"
-                  },
-                  {
-                    path: "audit-report.json",
-                    kind: "json"
-                  }
-                ]
-              }' > audit-report.json
-          fi
-
-          jq empty audit-report.json >/dev/null
+          bash ./.codex-smart-contract-auditor-src/scripts/validate-audit-outputs.sh
 
       - name: Upload audit artifacts
         if: always()
@@ -714,9 +413,19 @@ jobs:
     if: ${{ always() && inputs.post-pr-comment && needs.audit.outputs.pr_number != '' }}
     timeout-minutes: 10
     permissions:
+      contents: read
       issues: write
       pull-requests: write
     steps:
+      - name: Checkout audit tooling repository
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ needs.audit.outputs.workflow_repository }}
+          ref: ${{ needs.audit.outputs.workflow_ref }}
+          path: .codex-smart-contract-auditor-src
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Download audit artifacts
         uses: actions/download-artifact@v4
         with:
@@ -734,63 +443,9 @@ jobs:
           INFORMATIONAL: ${{ needs.audit.outputs.informational }}
           BLOCKED_CHECKS: ${{ needs.audit.outputs.blocked_checks }}
           ARTIFACT_NAME: ${{ needs.audit.outputs.artifact_name }}
+          AUDIT_REPORT_JSON_PATH: audit-report.json
         with:
           github-token: ${{ github.token }}
           script: |
-            const fs = require("fs");
-            const marker = "<!-- codex-smart-contract-audit -->";
-            const prNumber = Number(process.env.PR_NUMBER);
-            const report = JSON.parse(fs.readFileSync("audit-report.json", "utf8"));
-
-            const lines = [
-              marker,
-              "## Codex Smart Contract Audit",
-              "",
-              `Status: **${process.env.OVERALL_STATUS}**`,
-              "",
-              "| Severity | Count |",
-              "| --- | ---: |",
-              `| Critical | ${process.env.CRITICAL} |`,
-              `| High | ${process.env.HIGH} |`,
-              `| Medium | ${process.env.MEDIUM} |`,
-              `| Low | ${process.env.LOW} |`,
-              `| Informational | ${process.env.INFORMATIONAL} |`,
-              `| Blocked checks | ${process.env.BLOCKED_CHECKS} |`,
-              "",
-              `Artifacts: \`${process.env.ARTIFACT_NAME}\``,
-              "",
-              "The full markdown report and machine-readable JSON report are attached to this workflow run as artifacts."
-            ];
-
-            if ((report.blocked_checks || []).length > 0) {
-              lines.push("");
-              lines.push("Blocked checks:");
-              for (const blocked of report.blocked_checks.slice(0, 3)) {
-                lines.push(`- ${blocked.check}: ${blocked.reason}`);
-              }
-            }
-
-            const body = lines.join("\n");
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              per_page: 100,
-            });
-
-            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body,
-              });
-            }
+            const run = require(`${process.env.GITHUB_WORKSPACE}/.codex-smart-contract-auditor-src/scripts/upsert-pr-comment.cjs`);
+            await run({ github, context, process });
