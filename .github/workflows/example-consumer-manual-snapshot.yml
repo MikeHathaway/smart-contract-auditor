@@ -1,4 +1,4 @@
-name: Manual Main Snapshot Audit
+name: Manual Branch Snapshot Audit
 
 on:
   workflow_dispatch:
@@ -8,11 +8,12 @@ permissions:
 
 jobs:
   audit:
-    if: ${{ github.ref == 'refs/heads/main' }}
     uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
       provider: auto
       audit-mode: snapshot
+      # Choose the branch in the GitHub Actions "Run workflow" UI,
+      # or use `gh workflow run ... --ref <branch>`.
       model: ""
       effort: ""
       working-directory: .

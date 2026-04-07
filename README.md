@@ -87,7 +87,7 @@ Ready-to-copy consumer workflows:
 
 - generic provider-aware example: [`.github/workflows/example-consumer.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer.yml)
 - Venice-only example: [`.github/workflows/example-consumer-venice.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-venice.yml)
-- manual `main` snapshot example: [`.github/workflows/example-consumer-manual-main.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-manual-main.yml)
+- manual branch snapshot example: [`.github/workflows/example-consumer-manual-snapshot.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-manual-snapshot.yml)
 
 If you are consuming this repository directly, keep the `uses:` target pointed at `MikeHathaway/smart-contract-auditor`. Only change it if you fork or republish the reusable workflow under a different owner, repository, or ref.
 
@@ -185,7 +185,9 @@ The reusable workflow now supports a first-class snapshot mode:
 
 In snapshot mode, the workflow treats the entire checked-out tree as in-scope rather than pretending there is a meaningful PR diff.
 
-There is a ready-to-copy manual snapshot example in [`.github/workflows/example-consumer-manual-main.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-manual-main.yml).
+There is a ready-to-copy manual snapshot example in [`.github/workflows/example-consumer-manual-snapshot.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-manual-snapshot.yml).
+
+To audit a specific branch snapshot, select that branch in the GitHub Actions "Run workflow" branch picker, or run the workflow from CLI with `gh workflow run ... --ref <branch>`.
 
 ## Venice Setup
 
