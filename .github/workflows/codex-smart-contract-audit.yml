@@ -190,39 +190,6 @@ jobs:
           set -euo pipefail
           bash ./.codex-smart-contract-auditor-src/scripts/run-preflight.sh
 
-      - name: Generate runtime prompt
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
-          INPUT_AUDIT_MODE: ${{ steps.context.outputs.audit_mode }}
-          INPUT_EXTRA_AUDIT_INSTRUCTIONS: ${{ inputs.extra-audit-instructions }}
-        run: |
-          set -euo pipefail
-          cat .codex-smart-contract-auditor-src/audit-prompt.md > .codex-smart-contract-auditor/prompt.md
-          {
-            echo
-            echo "---"
-            echo
-            echo "## Runtime directives"
-            echo
-            echo "- Audit mode: \`$INPUT_AUDIT_MODE\`"
-            echo "- Prioritize code under: \`$INPUT_WORKING_DIRECTORY\`"
-            echo "- Treat the repository root as the output location for \`audit-report.md\` and \`audit-report.json\`."
-            echo "- Use the repo-scoped skills installed in \`.agents/skills\`."
-            echo "- Preserve raw forefy artifacts in \`.context/outputs/X/\` and do not overwrite existing numbered runs."
-            echo "- Use preflight evidence from \`.codex-smart-contract-auditor/preflight/\` when present."
-            echo "- If audit mode is \`snapshot\`, treat this as a full checked-out branch audit rather than a PR diff review."
-            echo "- If a tool is blocked by environment limits, record it in \`Blocked Checks\` instead of silently skipping it."
-            if [[ -n "$INPUT_EXTRA_AUDIT_INSTRUCTIONS" ]]; then
-              echo
-              echo "## Extra audit instructions"
-              echo
-              printf '%s\n' "$INPUT_EXTRA_AUDIT_INSTRUCTIONS"
-            fi
-            echo
-            cat .codex-smart-contract-auditor/runtime-context.md
-          } >> .codex-smart-contract-auditor/prompt.md
-
       - name: Resolve provider configuration
         id: provider_config
         shell: bash
@@ -293,6 +260,45 @@ jobs:
           echo "model=$model" >> "$GITHUB_OUTPUT"
           echo "effort=$effort" >> "$GITHUB_OUTPUT"
           echo "key_source=$key_source" >> "$GITHUB_OUTPUT"
+
+      - name: Generate runtime prompt
+        shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          INPUT_AUDIT_MODE: ${{ steps.context.outputs.audit_mode }}
+          INPUT_EXTRA_AUDIT_INSTRUCTIONS: ${{ inputs.extra-audit-instructions }}
+          RESOLVED_PROVIDER: ${{ steps.provider_config.outputs.provider }}
+        run: |
+          set -euo pipefail
+          cat .codex-smart-contract-auditor-src/audit-prompt.md > .codex-smart-contract-auditor/prompt.md
+          {
+            echo
+            echo "---"
+            echo
+            echo "## Runtime directives"
+            echo
+            echo "- Audit mode: \`$INPUT_AUDIT_MODE\`"
+            echo "- Provider: \`$RESOLVED_PROVIDER\`"
+            echo "- Prioritize code under: \`$INPUT_WORKING_DIRECTORY\`"
+            echo "- Treat the repository root as the output location for \`audit-report.md\` and \`audit-report.json\`."
+            echo "- Use the repo-scoped skills installed in \`.agents/skills\`."
+            echo "- Preserve raw forefy artifacts in \`.context/outputs/X/\` and do not overwrite existing numbered runs."
+            echo "- Use preflight evidence from \`.codex-smart-contract-auditor/preflight/\` when present."
+            echo "- If audit mode is \`snapshot\`, treat this as a full checked-out branch audit rather than a PR diff review."
+            echo "- If a tool is blocked by environment limits, record it in \`Blocked Checks\` instead of silently skipping it."
+            echo "- If direct file writes fail, include tagged fallback blocks in the final assistant message using the exact markers \`BEGIN AUDIT REPORT\` / \`END AUDIT REPORT\` and \`BEGIN AUDIT JSON\` / \`END AUDIT JSON\`."
+            if [[ "$RESOLVED_PROVIDER" == "venice" ]]; then
+              echo "- Because \`venice\` may complete the Responses request without honoring full Codex workspace-write behavior, the tagged fallback blocks in the final assistant message are mandatory even if you also wrote the repository files."
+            fi
+            if [[ -n "$INPUT_EXTRA_AUDIT_INSTRUCTIONS" ]]; then
+              echo
+              echo "## Extra audit instructions"
+              echo
+              printf '%s\n' "$INPUT_EXTRA_AUDIT_INSTRUCTIONS"
+            fi
+            echo
+            cat .codex-smart-contract-auditor/runtime-context.md
+          } >> .codex-smart-contract-auditor/prompt.md
 
       - name: Run Codex sequential audit
         id: run_codex

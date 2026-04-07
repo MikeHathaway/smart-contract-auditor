@@ -18,6 +18,8 @@ report_md_present=false
 report_json_present=false
 report_json_valid=false
 final_message_present=false
+report_md_source="workspace"
+report_json_source="workspace"
 
 [[ -f audit-report.md ]] && report_md_present=true
 [[ -f audit-report.json ]] && report_json_present=true
@@ -26,9 +28,53 @@ if [[ "$report_json_present" == "true" ]] && jq empty audit-report.json >/dev/nu
 fi
 [[ -f "$final_message_path" ]] && final_message_present=true
 
+extract_marked_block() {
+  local start_marker="$1"
+  local end_marker="$2"
+
+  [[ "$final_message_present" == "true" ]] || return
+
+  awk -v start="$start_marker" -v end="$end_marker" '
+    $0 == start { capture=1; next }
+    $0 == end { capture=0; exit }
+    capture { print }
+  ' "$final_message_path"
+}
+
+normalize_json_block() {
+  sed '/^```json[[:space:]]*$/d; /^```[[:space:]]*$/d'
+}
+
+attempt_final_message_recovery() {
+  [[ "$final_message_present" == "true" ]] || return
+
+  if [[ "$report_md_present" != "true" ]]; then
+    local recovered_report
+    recovered_report="$(extract_marked_block "BEGIN AUDIT REPORT" "END AUDIT REPORT")"
+    if [[ -n "$recovered_report" ]]; then
+      printf '%s\n' "$recovered_report" > audit-report.md
+      report_md_present=true
+      report_md_source="final-message-tagged-block"
+    fi
+  fi
+
+  if [[ "$report_json_valid" != "true" ]]; then
+    local recovered_json
+    recovered_json="$(extract_marked_block "BEGIN AUDIT JSON" "END AUDIT JSON" | normalize_json_block)"
+    if [[ -n "$recovered_json" ]] && printf '%s\n' "$recovered_json" | jq empty >/dev/null 2>&1; then
+      printf '%s\n' "$recovered_json" > audit-report.json
+      report_json_present=true
+      report_json_valid=true
+      report_json_source="final-message-tagged-block"
+    fi
+  fi
+}
+
+attempt_final_message_recovery
+
 output_contract_summary() {
-  printf 'audit-report.md=%s; audit-report.json=%s; audit-report.json.valid=%s; final-message=%s' \
-    "$report_md_present" "$report_json_present" "$report_json_valid" "$final_message_present"
+  printf 'audit-report.md=%s(%s); audit-report.json=%s(%s); audit-report.json.valid=%s; final-message=%s' \
+    "$report_md_present" "$report_md_source" "$report_json_present" "$report_json_source" "$report_json_valid" "$final_message_present"
 }
 
 output_contract_reason() {
@@ -39,6 +85,11 @@ output_contract_reason() {
 
   if [[ "$codex_outcome" == "failure" ]]; then
     printf "Codex action for provider '%s' failed before producing the required output files." "$provider"
+    return
+  fi
+
+  if [[ "$provider" == "venice" && "$final_message_present" == "true" && "$report_md_present" != "true" && "$report_json_valid" != "true" ]]; then
+    printf "Codex action for provider '%s' returned a final assistant message but did not create the required report files or tagged fallback blocks. This usually indicates partial Responses compatibility without full Codex workspace-write behavior." "$provider"
     return
   fi
 

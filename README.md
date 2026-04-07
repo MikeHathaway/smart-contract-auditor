@@ -167,7 +167,7 @@ Provider defaults are intentionally asymmetric:
 - Venice: if `effort` is blank, the workflow uses `high`
 - Venice: if `responses-api-endpoint` is blank, the workflow uses `https://api.venice.ai/api/v1/responses`
 
-That keeps OpenAI behavior cleaner while making Venice deterministic enough to work reliably with `openai/codex-action`.
+That keeps OpenAI behavior cleaner while making Venice deterministic enough to use with `openai/codex-action`, but Venice should still be treated as best-effort for full Codex `workspace-write` behavior.
 
 ## Workflow Internals
 
@@ -224,6 +224,8 @@ With those settings, the workflow resolves these Venice defaults automatically:
 If you need a different Venice model or endpoint, pass `model` or `responses-api-endpoint` explicitly.
 
 If both provider secrets are configured and you still want Venice, set `provider: venice` explicitly.
+
+The workflow now also assumes Venice may sometimes return a successful Responses completion without creating the expected repository files. To handle that, the prompt requires tagged final-message fallback blocks, and the workflow will recover `audit-report.md` and `audit-report.json` from the final message when possible.
 
 There is also a dedicated copy-paste Venice consumer workflow in [`.github/workflows/example-consumer-venice.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-venice.yml).
 

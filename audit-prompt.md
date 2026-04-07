@@ -270,6 +270,24 @@ Use this schema shape:
 }
 ```
 
+## Final-message fallback transport
+
+If you cannot create one or both repository files directly, your final assistant message must include recovery blocks using these exact marker lines:
+
+`BEGIN AUDIT REPORT`
+
+full markdown report content
+
+`END AUDIT REPORT`
+
+`BEGIN AUDIT JSON`
+
+full JSON content
+
+`END AUDIT JSON`
+
+Do not summarize inside those blocks. Emit the complete markdown and complete JSON so the workflow can recover the outputs.
+
 ## Quality bar
 
 - Do not return only generic advice.
