@@ -12,8 +12,63 @@ head_sha="${HEAD_SHA:-}"
 pr_number="${PR_NUMBER:-}"
 model_input="${MODEL_INPUT:-}"
 severity_threshold="${SEVERITY_THRESHOLD:-medium}"
+final_message_path=".codex-smart-contract-auditor/final-message.md"
 
-if [[ ! -f audit-report.md ]]; then
+report_md_present=false
+report_json_present=false
+report_json_valid=false
+final_message_present=false
+
+[[ -f audit-report.md ]] && report_md_present=true
+[[ -f audit-report.json ]] && report_json_present=true
+if [[ "$report_json_present" == "true" ]] && jq empty audit-report.json >/dev/null 2>&1; then
+  report_json_valid=true
+fi
+[[ -f "$final_message_path" ]] && final_message_present=true
+
+output_contract_summary() {
+  printf 'audit-report.md=%s; audit-report.json=%s; audit-report.json.valid=%s; final-message=%s' \
+    "$report_md_present" "$report_json_present" "$report_json_valid" "$final_message_present"
+}
+
+output_contract_reason() {
+  if [[ "$api_key_present" != "true" ]]; then
+    printf 'No API key was provided for provider %s.' "$provider"
+    return
+  fi
+
+  if [[ "$codex_outcome" == "failure" ]]; then
+    printf "Codex action for provider '%s' failed before producing the required output files." "$provider"
+    return
+  fi
+
+  local failures=()
+  [[ "$report_md_present" == "true" ]] || failures+=("missing audit-report.md")
+  [[ "$report_json_present" == "true" ]] || failures+=("missing audit-report.json")
+  if [[ "$report_json_present" == "true" && "$report_json_valid" != "true" ]]; then
+    failures+=("invalid audit-report.json")
+  fi
+
+  if [[ ${#failures[@]} -eq 0 ]]; then
+    printf "Codex output validation failed for an unknown reason."
+  else
+    printf "Codex action for provider '%s' completed with outcome '%s' but violated the output contract: %s." \
+      "$provider" "${codex_outcome:-unknown}" "$(IFS=', '; echo "${failures[*]}")"
+  fi
+}
+
+final_message_excerpt() {
+  if [[ "$final_message_present" != "true" ]]; then
+    return
+  fi
+
+  awk 'NR<=20 { print }' "$final_message_path" | sed 's/\r$//' | sed '/^[[:space:]]*$/d' | head -10
+}
+
+blocked_reason="$(output_contract_reason)"
+contract_summary="$(output_contract_summary)"
+
+if [[ "$report_md_present" != "true" ]]; then
   {
     printf '# Smart Contract Audit Report\n\n'
     printf '## Executive Summary\n\n'
@@ -34,19 +89,22 @@ if [[ ! -f audit-report.md ]]; then
     printf 'No confirmed findings were emitted because the audit did not complete.\n\n'
     printf '## Blocked Checks\n\n'
     printf -- '- Codex audit execution\n'
-    printf '  - Reason: %s\n' "$(if [[ "$api_key_present" != "true" ]]; then printf 'No API key was provided for provider %s.' "$provider"; else echo "Codex action for provider '$provider' finished with outcome '$codex_outcome' or did not write the required report files."; fi)"
+    printf '  - Reason: %s\n' "$blocked_reason"
+    printf '  - Output contract: %s\n' "$contract_summary"
+    if [[ "$final_message_present" == "true" ]]; then
+      printf '  - Final message path: %s\n' "$final_message_path"
+      printf '  - Final message excerpt:\n'
+      while IFS= read -r line; do
+        printf '    %s\n' "$line"
+      done < <(final_message_excerpt)
+    else
+      printf '  - Final message path: missing\n'
+    fi
     printf '  - Next step: Provide a valid provider API key, confirm repository prompts are valid, and re-run the workflow.\n'
   } > audit-report.md
 fi
 
-if ! jq empty audit-report.json >/dev/null 2>&1; then
-  blocked_reason="Codex did not write a valid audit-report.json file."
-  if [[ "$api_key_present" != "true" ]]; then
-    blocked_reason="No API key was provided for provider '$provider'."
-  elif [[ "$codex_outcome" == "failure" ]]; then
-    blocked_reason="Codex action for provider '$provider' failed before producing a valid JSON report."
-  fi
-
+if [[ "$report_json_valid" != "true" ]]; then
   jq -n \
     --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg repository "${GITHUB_REPOSITORY}" \
@@ -58,8 +116,13 @@ if ! jq empty audit-report.json >/dev/null 2>&1; then
     --arg provider "${provider:-openai}" \
     --arg provider_key_source "${provider_key_source:-}" \
     --arg responses_api_endpoint "${responses_api_endpoint:-}" \
+    --arg codex_outcome "${codex_outcome:-}" \
     --arg severity_threshold "${severity_threshold}" \
     --arg blocked_reason "$blocked_reason" \
+    --arg output_contract_summary "$contract_summary" \
+    --arg final_message_path "$final_message_path" \
+    --arg final_message_present "$final_message_present" \
+    --arg final_message_excerpt "$(final_message_excerpt)" \
     '{
       schema_version: "1.0",
       generated_at: $generated_at,
@@ -71,6 +134,7 @@ if ! jq empty audit-report.json >/dev/null 2>&1; then
       provider: $provider,
       provider_key_source: (if $provider_key_source == "" then null else $provider_key_source end),
       responses_api_endpoint: (if $responses_api_endpoint == "" then null else $responses_api_endpoint end),
+      codex_outcome: (if $codex_outcome == "" then null else $codex_outcome end),
       model: $model,
       severity_threshold: $severity_threshold,
       summary: {
@@ -109,6 +173,9 @@ if ! jq empty audit-report.json >/dev/null 2>&1; then
         {
           check: "codex-sequential-audit",
           reason: $blocked_reason,
+          output_contract: $output_contract_summary,
+          final_message_path: (if $final_message_present == "true" then $final_message_path else null end),
+          final_message_excerpt: (if $final_message_excerpt == "" then null else $final_message_excerpt end),
           next_step: "Provide a valid provider API key and re-run the workflow."
         }
       ],

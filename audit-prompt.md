@@ -16,6 +16,7 @@ The runtime context will tell you whether this is:
 5. Merge the result into one professional report.
 
 Do not skip either required skill. If one cannot run fully, record that in `Blocked Checks` and continue with the other analysis.
+Treat the appended runtime context as a compact summary. Open the referenced preflight artifacts only when you need deeper evidence.
 
 ## Audit scope rules
 

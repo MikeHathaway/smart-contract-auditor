@@ -31,6 +31,31 @@ safe_line_count() {
   fi
 }
 
+emit_preview_section() {
+  local heading="$1"
+  local file="$2"
+  local limit="$3"
+
+  local count
+  count="$(safe_line_count "$file")"
+
+  echo "## $heading"
+  echo "- Count: $count"
+  echo "- Full artifact: \`$file\`"
+
+  if [[ -s "$file" ]]; then
+    echo "- Preview:"
+    head -n "$limit" "$file" | sed 's/^/  - /'
+    if (( count > limit )); then
+      echo "  - ... ($((count - limit)) more line(s))"
+    fi
+  else
+    echo "- Preview: none"
+  fi
+
+  echo
+}
+
 run_preflight_scan() {
   local label="$1"
   shift
@@ -78,6 +103,7 @@ token_surface="$preflight_dir/token-surface.txt"
 upgrade_surface="$preflight_dir/upgrade-surface.txt"
 access_control_surface="$preflight_dir/access-control-surface.txt"
 blast_radius="$preflight_dir/blast-radius-seeds.txt"
+layout_files="$preflight_dir/layout-files.txt"
 summary_path="$preflight_dir/summary.md"
 checks_path="$preflight_dir/preflight-checks.md"
 blockers_path="$preflight_dir/tool-blockers.md"
@@ -140,6 +166,9 @@ rg --no-heading --line-number 'function\s+[A-Za-z0-9_]+\s*\([^)]*\)[^{;]*\b(only
 rg --no-heading --line-number 'IERC20|IERC721|IERC1155|ERC20|ERC721|ERC1155|transferFrom|safeTransferFrom|approve\(|permit\(' "$workdir" > "$token_surface" || true
 rg --no-heading --line-number 'UUPSUpgradeable|TransparentUpgradeableProxy|ERC1967|ProxyAdmin|upgradeTo|upgradeToAndCall|initializer|reinitializer' "$workdir" > "$upgrade_surface" || true
 rg --no-heading --line-number 'onlyOwner|onlyRole|AccessControl|Ownable|auth|governor|timelock|multisig|pause\(|unpause\(' "$workdir" > "$access_control_surface" || true
+find . -maxdepth 2 \
+  \( -name 'foundry.toml' -o -name 'hardhat.config.*' -o -name 'package.json' -o -name 'pyproject.toml' -o -name 'remappings.txt' \) \
+  -print | sort > "$layout_files" || true
 
 : > "$blast_radius"
 if [[ -s "$solidity_changes" ]]; then
@@ -165,52 +194,33 @@ fi
     echo "- Pull request number: ${pr_number:-unavailable}"
   fi
   echo
-  echo "## Repository layout"
-  find . -maxdepth 2 \
-    \( -name 'foundry.toml' -o -name 'hardhat.config.*' -o -name 'package.json' -o -name 'pyproject.toml' -o -name 'remappings.txt' \) \
-    -print | sort || true
-  echo
   echo "## Tool availability"
   printf -- "- slither: %s\n" "$(command -v slither >/dev/null 2>&1 && slither --version 2>/dev/null | head -1 || echo unavailable)"
   printf -- "- solc-select: %s\n" "$(command -v solc-select >/dev/null 2>&1 && solc-select --version 2>/dev/null | head -1 || echo unavailable)"
   printf -- "- forge: %s\n" "$(command -v forge >/dev/null 2>&1 && forge --version 2>/dev/null | head -1 || echo unavailable)"
   printf -- "- node: %s\n" "$(command -v node >/dev/null 2>&1 && node --version 2>/dev/null || echo unavailable)"
   echo
+  echo "## Detailed preflight artifacts"
+  echo "- Summary: \`$summary_path\`"
+  echo "- Checks: \`$checks_path\`"
+  echo "- Blockers: \`$blockers_path\`"
+  echo
+  emit_preview_section "Repository layout" "$layout_files" 12
   echo "## Diff stat"
-  cat "$preflight_dir/diff-stat.txt"
+  echo "- Full artifact: \`$preflight_dir/diff-stat.txt\`"
+  sed 's/^/- /' "$preflight_dir/diff-stat.txt" || true
   echo
-  echo "## Changed files"
-  sed 's/^/- /' "$changed_files" || true
-  echo
-  echo "## Contract inventory"
-  sed 's/^/- /' "$contract_files" || true
-  echo
-  echo "## Test inventory"
-  sed 's/^/- /' "$test_files" || true
-  echo
-  echo "## Script inventory"
-  sed 's/^/- /' "$script_files" || true
-  echo
-  echo "## Solidity / Vyper changes"
-  sed 's/^/- /' "$solidity_changes" || true
-  echo
-  echo "## Blast radius seeds"
-  sed 's/^/- /' "$blast_radius" || true
-  echo
-  echo "## Public / external entry points"
-  cat "$entry_points" || true
-  echo
-  echo "## Privileged entry points"
-  cat "$privileged_entry_points" || true
-  echo
-  echo "## Token surface"
-  cat "$token_surface" || true
-  echo
-  echo "## Upgrade surface"
-  cat "$upgrade_surface" || true
-  echo
-  echo "## Access control surface"
-  cat "$access_control_surface" || true
+  emit_preview_section "Changed files" "$changed_files" 20
+  emit_preview_section "Solidity / Vyper changes" "$solidity_changes" 20
+  emit_preview_section "Contract inventory" "$contract_files" 20
+  emit_preview_section "Test inventory" "$test_files" 12
+  emit_preview_section "Script inventory" "$script_files" 12
+  emit_preview_section "Blast radius seeds" "$blast_radius" 20
+  emit_preview_section "Public / external entry points" "$entry_points" 20
+  emit_preview_section "Privileged entry points" "$privileged_entry_points" 20
+  emit_preview_section "Token surface" "$token_surface" 20
+  emit_preview_section "Upgrade surface" "$upgrade_surface" 20
+  emit_preview_section "Access control surface" "$access_control_surface" 20
 } > "$runtime_context_path"
 
 {
