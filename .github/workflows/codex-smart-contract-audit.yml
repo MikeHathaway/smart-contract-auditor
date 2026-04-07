@@ -481,45 +481,13 @@ jobs:
           echo "effort=$effort" >> "$GITHUB_OUTPUT"
           echo "key_source=$key_source" >> "$GITHUB_OUTPUT"
 
-      - name: Run Codex sequential audit with OpenAI
-        id: run_codex_openai
-        if: ${{ steps.provider_config.outputs.provider == 'openai' && steps.provider_config.outputs.api_key_present == 'true' }}
+      - name: Run Codex sequential audit
+        id: run_codex
+        if: ${{ steps.provider_config.outputs.api_key_present == 'true' }}
         continue-on-error: true
         uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ env.OPENAI_API_KEY_VALUE }}
-          responses-api-endpoint: ${{ steps.provider_config.outputs.responses_api_endpoint }}
-          prompt-file: .codex-smart-contract-auditor/prompt.md
-          output-file: .codex-smart-contract-auditor/final-message.md
-          safety-strategy: drop-sudo
-          sandbox: workspace-write
-          codex-args: '["--full-auto"]'
-          model: ${{ steps.provider_config.outputs.model }}
-          effort: ${{ steps.provider_config.outputs.effort }}
-
-      - name: Run Codex sequential audit with Venice
-        id: run_codex_venice
-        if: ${{ steps.provider_config.outputs.provider == 'venice' && steps.provider_config.outputs.key_source == 'venice' }}
-        continue-on-error: true
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ env.VENICE_API_KEY_VALUE }}
-          responses-api-endpoint: ${{ steps.provider_config.outputs.responses_api_endpoint }}
-          prompt-file: .codex-smart-contract-auditor/prompt.md
-          output-file: .codex-smart-contract-auditor/final-message.md
-          safety-strategy: drop-sudo
-          sandbox: workspace-write
-          codex-args: '["--full-auto"]'
-          model: ${{ steps.provider_config.outputs.model }}
-          effort: ${{ steps.provider_config.outputs.effort }}
-
-      - name: Run Codex sequential audit with Venice key from OPENAI_API_KEY
-        id: run_codex_venice_fallback
-        if: ${{ steps.provider_config.outputs.provider == 'venice' && steps.provider_config.outputs.key_source == 'openai-fallback' }}
-        continue-on-error: true
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ env.OPENAI_API_KEY_VALUE }}
+          openai-api-key: ${{ steps.provider_config.outputs.key_source == 'venice' && env.VENICE_API_KEY_VALUE || env.OPENAI_API_KEY_VALUE }}
           responses-api-endpoint: ${{ steps.provider_config.outputs.responses_api_endpoint }}
           prompt-file: .codex-smart-contract-auditor/prompt.md
           output-file: .codex-smart-contract-auditor/final-message.md
@@ -537,7 +505,7 @@ jobs:
           PROVIDER: ${{ steps.provider_config.outputs.provider }}
           PROVIDER_KEY_SOURCE: ${{ steps.provider_config.outputs.key_source }}
           RESPONSES_API_ENDPOINT: ${{ steps.provider_config.outputs.responses_api_endpoint }}
-          CODEX_OUTCOME: ${{ steps.run_codex_openai.outcome || steps.run_codex_venice.outcome || steps.run_codex_venice_fallback.outcome }}
+          CODEX_OUTCOME: ${{ steps.run_codex.outcome }}
           BASE_SHA: ${{ steps.context.outputs.base_sha }}
           HEAD_SHA: ${{ steps.context.outputs.head_sha }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
