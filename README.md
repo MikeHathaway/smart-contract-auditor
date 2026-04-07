@@ -66,7 +66,7 @@ permissions:
 
 jobs:
   audit:
-    uses: your-org/codex-smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
+    uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
       provider: auto
       model: ""
@@ -86,6 +86,8 @@ Ready-to-copy consumer workflows:
 
 - generic provider-aware example: [`.github/workflows/example-consumer.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer.yml)
 - Venice-only example: [`.github/workflows/example-consumer-venice.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-venice.yml)
+
+If you are consuming this repository directly, keep the `uses:` target pointed at `MikeHathaway/smart-contract-auditor`. Only change it if you fork or republish the reusable workflow under a different owner, repository, or ref.
 
 ## Provider Secrets
 
@@ -140,7 +142,7 @@ To force Venice as the backing Responses provider:
 ```yaml
 jobs:
   audit:
-    uses: your-org/codex-smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
+    uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
       provider: venice
       model: ""

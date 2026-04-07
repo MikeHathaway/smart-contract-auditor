@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   audit:
-    uses: your-org/codex-smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
+    uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
       provider: venice
       # Leave model/effort blank to use the workflow's Venice defaults:

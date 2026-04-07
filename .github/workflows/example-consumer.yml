@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   audit:
-    uses: your-org/codex-smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
+    uses: MikeHathaway/smart-contract-auditor/.github/workflows/codex-smart-contract-audit.yml@main
     with:
       # `auto` prefers OpenAI if both OPENAI_API_KEY and VENICE_API_KEY are set.
       # Set `provider: venice` to force Venice defaults.
