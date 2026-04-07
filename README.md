@@ -89,7 +89,14 @@ Ready-to-copy consumer workflows:
 - Venice-only example: [`.github/workflows/example-consumer-venice.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-venice.yml)
 - manual branch snapshot example: [`.github/workflows/example-consumer-manual-snapshot.yml`](/home/mike/Projects-2026/smart-contract-auditor/.github/workflows/example-consumer-manual-snapshot.yml)
 
-If you are consuming this repository directly, keep the `uses:` target pointed at `MikeHathaway/smart-contract-auditor`. Only change it if you fork or republish the reusable workflow under a different owner, repository, or ref.
+If you are consuming this repository directly, keep the `uses:` target pointed at `MikeHathaway/smart-contract-auditor`.
+
+If you fork or republish this reusable workflow, also set these advanced inputs to match your fork and ref:
+
+- `workflow-source-repository`
+- `workflow-source-ref`
+
+That is necessary because reusable workflows run in the caller repository context, so the helper scripts must be checked out explicitly from the workflow source repository.
 
 ## Provider Secrets
 
@@ -149,6 +156,8 @@ The reusable workflow supports these inputs:
 - `base-sha`: optional explicit base SHA, primarily for `audit-mode: pr`
 - `head-sha`: optional explicit head SHA
 - `pr-number`: optional explicit pull request number, primarily for `audit-mode: pr`
+- `workflow-source-repository`: advanced override for where helper scripts are checked out from; defaults to `MikeHathaway/smart-contract-auditor`
+- `workflow-source-ref`: advanced override for which ref helper scripts are checked out from; defaults to `main`
 
 Provider defaults are intentionally asymmetric:
 

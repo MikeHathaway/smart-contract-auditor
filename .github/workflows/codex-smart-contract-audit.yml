@@ -68,6 +68,16 @@ on:
         required: false
         type: string
         default: ""
+      workflow-source-repository:
+        description: Repository that hosts this reusable workflow and its helper scripts.
+        required: false
+        type: string
+        default: MikeHathaway/smart-contract-auditor
+      workflow-source-ref:
+        description: Ref to checkout for this reusable workflow's helper scripts.
+        required: false
+        type: string
+        default: main
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -89,8 +99,6 @@ jobs:
     permissions:
       contents: read
     outputs:
-      workflow_repository: ${{ steps.workflow_source.outputs.repository }}
-      workflow_ref: ${{ steps.workflow_source.outputs.ref }}
       audit_mode: ${{ steps.context.outputs.audit_mode }}
       pr_number: ${{ steps.summarize.outputs.pr_number }}
       overall_status: ${{ steps.summarize.outputs.overall_status }}
@@ -102,18 +110,6 @@ jobs:
       blocked_checks: ${{ steps.summarize.outputs.blocked_checks }}
       artifact_name: ${{ steps.summarize.outputs.artifact_name }}
     steps:
-      - name: Resolve reusable workflow source
-        id: workflow_source
-        shell: bash
-        env:
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-        run: |
-          set -euo pipefail
-          repository="${WORKFLOW_REF%%/.github/workflows/*}"
-          ref="${WORKFLOW_REF##*@}"
-          echo "repository=$repository" >> "$GITHUB_OUTPUT"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
       - name: Checkout caller repository
         uses: actions/checkout@v5
         with:
@@ -123,8 +119,8 @@ jobs:
       - name: Checkout audit tooling repository
         uses: actions/checkout@v5
         with:
-          repository: ${{ steps.workflow_source.outputs.repository }}
-          ref: ${{ steps.workflow_source.outputs.ref }}
+          repository: ${{ inputs.workflow-source-repository }}
+          ref: ${{ inputs.workflow-source-ref }}
           path: .codex-smart-contract-auditor-src
           fetch-depth: 1
           persist-credentials: false
@@ -425,8 +421,8 @@ jobs:
       - name: Checkout audit tooling repository
         uses: actions/checkout@v5
         with:
-          repository: ${{ needs.audit.outputs.workflow_repository }}
-          ref: ${{ needs.audit.outputs.workflow_ref }}
+          repository: ${{ inputs.workflow-source-repository }}
+          ref: ${{ inputs.workflow-source-ref }}
           path: .codex-smart-contract-auditor-src
           fetch-depth: 1
           persist-credentials: false
