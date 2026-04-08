@@ -17,6 +17,17 @@ The runtime context will tell you whether this is:
 
 Do not skip either required skill. If one cannot run fully, record that in `Blocked Checks` and continue with the other analysis.
 Treat the appended runtime context as a compact summary. Open the referenced preflight artifacts only when you need deeper evidence.
+Start with `summary.md`, `diff-stat.txt`, and `changed-files.txt` before opening broader inventories or scan outputs.
+
+## Cost control rules
+
+The runtime directives include a `cost profile`.
+
+- If `cost profile: max`, favor maximum audit depth even if it materially increases token usage.
+- If `cost profile: balanced`, prefer the required two core skills, use preflight artifacts before opening every detailed artifact, and avoid helper-skill runs that would mostly restate deterministic preflight evidence.
+- If `cost profile: lean`, minimize helper-skill usage and only open deeper artifacts when needed to confirm or refute a real issue.
+
+Treat `balanced` as the normal default unless the runtime directives explicitly say otherwise.
 
 ## Audit scope rules
 
@@ -41,21 +52,32 @@ Treat the appended runtime context as a compact summary. Open the referenced pre
 
 ## Deterministic helper-skill triggers
 
-If any of these conditions are true, the helper skill is required, not optional:
+Helper-skill usage is controlled by both trigger conditions and the runtime cost profile.
+
+In `cost profile: max`, the triggered helper skills below are required.
+
+In `cost profile: balanced`, use the helper skill only when it adds clear signal beyond the existing preflight artifacts.
+
+In `cost profile: lean`, do not run helper skills unless the finding quality would otherwise be materially weaker.
+
+Trigger rules:
 
 - Run `$token-integration-analyzer` if the runtime context or preflight artifacts show:
   - ERC20 / ERC721 / ERC1155 interfaces or implementations
   - token transfers, approvals, permits, wrappers, vault shares, fee-on-transfer handling
   - any changed or blast-radius code that integrates third-party tokens
+  - and the token behavior is substantive enough that the analyzer would add more than a restatement of simple preflight grep hits
 - Run `$entry-point-analyzer` if the runtime context or preflight artifacts show:
   - changed public or external entry points
   - changed privileged entry points
   - upgrade, admin, governance, or pause-related surfaces
+  - and the access patterns are broad or ambiguous enough that the analyzer adds structure beyond the preflight entry-point artifacts
 - Run `$foundry-poc` if:
   - you identify a plausible high- or critical-severity EVM finding
   - a Foundry project is present or `forge` is available
   - a realistic proof can be attempted without fabricating setup
 - Run `$tiny-auditor` as a final critical-loss sweep when:
+  - the runtime directives explicitly enable the tiny auditor sweep
   - the project is EVM
   - the changed and blast-radius contract set is still tractable
   - you can use it to challenge whether any unprivileged loss-of-funds issues were missed
@@ -272,7 +294,7 @@ Use this schema shape:
 
 ## Final-message fallback transport
 
-If you cannot create one or both repository files directly, your final assistant message must include recovery blocks using these exact marker lines:
+If you cannot create one or both repository files directly, or if you cannot verify that both files exist immediately before finishing, your final assistant message must include recovery blocks using these exact marker lines:
 
 `BEGIN AUDIT REPORT`
 

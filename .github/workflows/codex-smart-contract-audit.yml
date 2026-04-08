@@ -53,6 +53,16 @@ on:
         required: false
         type: string
         default: ""
+      cost-profile:
+        description: Cost and depth profile. Use `max`, `balanced`, or `lean`.
+        required: false
+        type: string
+        default: balanced
+      enable-tiny-auditor:
+        description: Run the optional final tiny-auditor critical-loss sweep.
+        required: false
+        type: boolean
+        default: false
       base-sha:
         description: "Optional explicit PR base SHA. Ignored in `audit-mode: snapshot`."
         required: false
@@ -185,6 +195,7 @@ jobs:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
           INPUT_AUDIT_MODE: ${{ inputs.audit-mode }}
           INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity-threshold }}
+          INPUT_COST_PROFILE: ${{ inputs.cost-profile }}
           HAS_FOUNDRY: ${{ steps.toolchain_layout.outputs.foundry }}
         run: |
           set -euo pipefail
@@ -267,6 +278,8 @@ jobs:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
           INPUT_AUDIT_MODE: ${{ steps.context.outputs.audit_mode }}
           INPUT_EXTRA_AUDIT_INSTRUCTIONS: ${{ inputs.extra-audit-instructions }}
+          INPUT_COST_PROFILE: ${{ inputs.cost-profile }}
+          INPUT_ENABLE_TINY_AUDITOR: ${{ inputs.enable-tiny-auditor }}
           RESOLVED_PROVIDER: ${{ steps.provider_config.outputs.provider }}
         run: |
           set -euo pipefail
@@ -279,16 +292,19 @@ jobs:
             echo
             echo "- Audit mode: \`$INPUT_AUDIT_MODE\`"
             echo "- Provider: \`$RESOLVED_PROVIDER\`"
+            echo "- Cost profile: \`$INPUT_COST_PROFILE\`"
+            echo "- Tiny auditor sweep enabled: \`$INPUT_ENABLE_TINY_AUDITOR\`"
             echo "- Prioritize code under: \`$INPUT_WORKING_DIRECTORY\`"
             echo "- Treat the repository root as the output location for \`audit-report.md\` and \`audit-report.json\`."
             echo "- Use the repo-scoped skills installed in \`.agents/skills\`."
             echo "- Preserve raw forefy artifacts in \`.context/outputs/X/\` and do not overwrite existing numbered runs."
             echo "- Use preflight evidence from \`.codex-smart-contract-auditor/preflight/\` when present."
+            echo "- Start with \`.codex-smart-contract-auditor/preflight/summary.md\`, \`diff-stat.txt\`, and \`changed-files.txt\`; only open deeper preflight artifacts when they are needed to confirm a finding or trigger a helper skill."
             echo "- If audit mode is \`snapshot\`, treat this as a full checked-out branch audit rather than a PR diff review."
             echo "- If a tool is blocked by environment limits, record it in \`Blocked Checks\` instead of silently skipping it."
-            echo "- If direct file writes fail, include tagged fallback blocks in the final assistant message using the exact markers \`BEGIN AUDIT REPORT\` / \`END AUDIT REPORT\` and \`BEGIN AUDIT JSON\` / \`END AUDIT JSON\`."
+            echo "- If direct file writes fail, or if you cannot verify both output files immediately before finishing, include tagged fallback blocks in the final assistant message using the exact markers \`BEGIN AUDIT REPORT\` / \`END AUDIT REPORT\` and \`BEGIN AUDIT JSON\` / \`END AUDIT JSON\`."
             if [[ "$RESOLVED_PROVIDER" == "venice" ]]; then
-              echo "- Because \`venice\` may complete the Responses request without honoring full Codex workspace-write behavior, the tagged fallback blocks in the final assistant message are mandatory even if you also wrote the repository files."
+              echo "- For \`venice\`, verify both output files immediately before finishing. Emit tagged fallback blocks only if either file is missing or you are unsure the provider preserved the workspace writes."
             fi
             if [[ -n "$INPUT_EXTRA_AUDIT_INSTRUCTIONS" ]]; then
               echo

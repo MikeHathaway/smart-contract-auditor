@@ -153,6 +153,8 @@ The reusable workflow supports these inputs:
 - `fail-on-severity`: fail the workflow when findings at or above this severity exist
 - `post-pr-comment`: enable or disable sticky PR comments
 - `extra-audit-instructions`: append extra markdown instructions to the runtime prompt
+- `cost-profile`: `max`, `balanced`, or `lean`; defaults to `balanced`
+- `enable-tiny-auditor`: run the optional final critical-loss sweep; defaults to `false`
 - `base-sha`: optional explicit base SHA, primarily for `audit-mode: pr`
 - `head-sha`: optional explicit head SHA
 - `pr-number`: optional explicit pull request number, primarily for `audit-mode: pr`
@@ -168,6 +170,13 @@ Provider defaults are intentionally asymmetric:
 - Venice: if `responses-api-endpoint` is blank, the workflow uses `https://api.venice.ai/api/v1/responses`
 
 That keeps OpenAI behavior cleaner while making Venice deterministic enough to use with `openai/codex-action`, but Venice should still be treated as best-effort for full Codex `workspace-write` behavior.
+
+Cost defaults are intentionally conservative:
+
+- `cost-profile: balanced` is the default
+- `enable-tiny-auditor: false` is the default
+
+That keeps the two required core skills in place while avoiding the most expensive optional sweep on every run.
 
 ## Workflow Internals
 
@@ -318,13 +327,18 @@ It also preserves the raw numbered `.context/outputs/X/` audit trail instead of 
 
 ## Deterministic Helper Skill Triggers
 
-For maximum rigor, the prompt now treats certain helper-skill invocations as required when their trigger conditions are present:
+Helper-skill behavior now depends on the runtime cost profile:
 
-- token-related blast radius -> `token-integration-analyzer`
-- changed external, admin, governance, or upgrade surfaces -> `entry-point-analyzer`
+- `cost-profile: max` favors maximum helper-skill depth
+- `cost-profile: balanced` only runs helper skills when they add signal beyond deterministic preflight artifacts
+- `cost-profile: lean` minimizes helper-skill use unless they materially improve finding quality
+
+The main helper triggers are:
+
+- token-related blast radius -> `token-integration-analyzer` when it adds signal beyond preflight artifacts
+- changed external, admin, governance, or upgrade surfaces -> `entry-point-analyzer` when it adds signal beyond preflight artifacts
 - plausible high-severity exploit plus Foundry availability -> `foundry-poc`
-
-This is a better fit for the upstream skill design than leaving helper skills entirely discretionary.
+- optional final tractable-loss sweep -> `tiny-auditor` only when `enable-tiny-auditor: true`
 
 ## How Skill Installation Works
 
@@ -395,6 +409,7 @@ Also important:
 - Smart contract repos vary wildly. Some checks will still block on compiler or dependency layout. When that happens, the workflow reports the block instead of pretending the check ran.
 - For forked PRs, GitHub often withholds secrets. In that case you still get artifacts, but the report will show Codex execution as blocked.
 - Venice support depends on Venice continuing to accept Codex-compatible Responses API payloads. The workflow now targets Venice’s `/api/v1/responses` endpoint directly, but provider-specific payload differences can still affect behavior.
+- If you need materially lower token usage, the biggest levers are `cost-profile: lean` and reducing provider `effort` from `high` to `medium`.
 
 ## Compatibility
 

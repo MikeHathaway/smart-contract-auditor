@@ -6,6 +6,7 @@ preflight_dir="${PREFLIGHT_DIR:-.codex-smart-contract-auditor/preflight}"
 runtime_context_path="${RUNTIME_CONTEXT_PATH:-.codex-smart-contract-auditor/runtime-context.md}"
 has_foundry="${HAS_FOUNDRY:-false}"
 audit_mode="${INPUT_AUDIT_MODE:-pr}"
+cost_profile="${INPUT_COST_PROFILE:-balanced}"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -186,6 +187,7 @@ fi
   echo "- Audit mode: $audit_mode"
   echo "- Working directory: $workdir"
   echo "- Severity threshold: $severity_threshold"
+  echo "- Cost profile: $cost_profile"
   echo "- Base SHA: ${base_sha:-unavailable}"
   echo "- Head SHA: ${head_sha:-unavailable}"
   if [[ "$audit_mode" == "snapshot" ]]; then
@@ -205,22 +207,23 @@ fi
   echo "- Checks: \`$checks_path\`"
   echo "- Blockers: \`$blockers_path\`"
   echo
-  emit_preview_section "Repository layout" "$layout_files" 12
+  emit_preview_section "Repository layout" "$layout_files" 8
   echo "## Diff stat"
   echo "- Full artifact: \`$preflight_dir/diff-stat.txt\`"
   sed 's/^/- /' "$preflight_dir/diff-stat.txt" || true
   echo
-  emit_preview_section "Changed files" "$changed_files" 20
-  emit_preview_section "Solidity / Vyper changes" "$solidity_changes" 20
-  emit_preview_section "Contract inventory" "$contract_files" 20
-  emit_preview_section "Test inventory" "$test_files" 12
-  emit_preview_section "Script inventory" "$script_files" 12
-  emit_preview_section "Blast radius seeds" "$blast_radius" 20
-  emit_preview_section "Public / external entry points" "$entry_points" 20
-  emit_preview_section "Privileged entry points" "$privileged_entry_points" 20
-  emit_preview_section "Token surface" "$token_surface" 20
-  emit_preview_section "Upgrade surface" "$upgrade_surface" 20
-  emit_preview_section "Access control surface" "$access_control_surface" 20
+  emit_preview_section "Changed files" "$changed_files" 10
+  emit_preview_section "Solidity / Vyper changes" "$solidity_changes" 10
+  echo "## Surface counts"
+  echo "- Contract inventory: $(safe_line_count "$contract_files") (\`$contract_files\`)"
+  echo "- Test inventory: $(safe_line_count "$test_files") (\`$test_files\`)"
+  echo "- Script inventory: $(safe_line_count "$script_files") (\`$script_files\`)"
+  echo "- Blast radius seeds: $(safe_line_count "$blast_radius") (\`$blast_radius\`)"
+  echo "- Public / external entry points: $(safe_line_count "$entry_points") (\`$entry_points\`)"
+  echo "- Privileged entry points: $(safe_line_count "$privileged_entry_points") (\`$privileged_entry_points\`)"
+  echo "- Token surface hits: $(safe_line_count "$token_surface") (\`$token_surface\`)"
+  echo "- Upgrade surface hits: $(safe_line_count "$upgrade_surface") (\`$upgrade_surface\`)"
+  echo "- Access control surface hits: $(safe_line_count "$access_control_surface") (\`$access_control_surface\`)"
 } > "$runtime_context_path"
 
 {
